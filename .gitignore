@@ -10,3 +10,4 @@ dist
 data/
 __pycache__/
 *.pyc
+model-refresh/zhvi.csv
