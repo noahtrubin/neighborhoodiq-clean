@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  output: "standalone",
+
   // Pin the workspace root to this app dir. A stale root-level package-lock.json
   // (from the old Vite app) otherwise makes Next infer the parent as the root,
   // which also throws off output file tracing on deploy.
