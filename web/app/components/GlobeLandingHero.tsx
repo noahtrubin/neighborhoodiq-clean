@@ -49,41 +49,79 @@ const US_ROTATE: [number, number] = [-US_CENTER[0], -US_CENTER[1]]; // [98.5, -3
 const START_TILT = -14; // initial latitude tilt of the globe
 const SPIN_DEG_PER_SEC = 6; // idle auto-rotation
 
-// City fly-to: how tight the metro view frames (degrees across), and how long
-// the fly-to / fly-home animation takes.
+// Framing spans (degrees across) per zoom level, plus animation timing. A city
+// frames tight (street/metro); a state frames its whole bounding box.
 const CITY_SPAN_LNG = 3.6;
 const CITY_SPAN_LAT = 2.4;
 const FLY_SECONDS = 1.15;
+// Fraction of the viewport the framed region fills (leaves a margin of ocean).
+const CITY_FILL_W = 0.9,
+  CITY_FILL_H = 0.8;
+const STATE_FILL_W = 0.82,
+  STATE_FILL_H = 0.74;
+// Time constant for easing the *displayed* focus toward a new target when you
+// re-target while already zoomed in (state→city drill, city→city hop).
+const RETARGET_TAU = 0.26;
 
-type City = { name: string; lng: number; lat: number; zip: string };
+// A place the globe can fly to. `kind` drives the overlay copy + drill behavior;
+// span/fill drive how tightly it frames; `stateAbbr` links a city to its parent
+// state (for the Back button) or holds a state's own abbreviation.
+type Place = {
+  kind: "state" | "city";
+  name: string;
+  lng: number;
+  lat: number;
+  lngSpan: number;
+  latSpan: number;
+  fillW: number;
+  fillH: number;
+  zip?: string;
+  stateAbbr?: string;
+};
 
-// Metro chips in the hero — same four as before, now "zoom to this city".
-// color tints the chip; lng/lat drive the fly-to; zip backs the city CTA.
+type City = { name: string; lng: number; lat: number; zip: string; state: string };
+function cityPlace(c: City): Place {
+  return {
+    kind: "city",
+    name: c.name,
+    lng: c.lng,
+    lat: c.lat,
+    lngSpan: CITY_SPAN_LNG,
+    latSpan: CITY_SPAN_LAT,
+    fillW: CITY_FILL_W,
+    fillH: CITY_FILL_H,
+    zip: c.zip,
+    stateAbbr: c.state,
+  };
+}
+
+// Metro chips in the hero — quick "zoom straight to this city" shortcuts.
 const METROS: (City & { color: string })[] = [
-  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", color: "var(--lgh-moss)" },
-  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", color: "var(--lgh-gold)" },
-  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", color: "var(--lgh-teal)" },
-  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", color: "var(--lgh-coral)" },
+  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", state: "MA", color: "var(--lgh-moss)" },
+  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", state: "TX", color: "var(--lgh-gold)" },
+  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", state: "IL", color: "var(--lgh-teal)" },
+  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", state: "NY", color: "var(--lgh-coral)" },
 ];
 
-// The full "jump to a city" rail, shown on the resolved map and while focused.
+// Curated metros — drill targets shown inside a focused state, and sibling
+// rails for hopping between cities in the same state.
 const CITIES: City[] = [
-  { name: "Seattle", lng: -122.33, lat: 47.61, zip: "98101" },
-  { name: "San Francisco", lng: -122.42, lat: 37.77, zip: "94110" },
-  { name: "Los Angeles", lng: -118.24, lat: 34.05, zip: "90012" },
-  { name: "Denver", lng: -104.99, lat: 39.74, zip: "80202" },
-  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704" },
-  { name: "Houston", lng: -95.37, lat: 29.76, zip: "77002" },
-  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647" },
-  { name: "Atlanta", lng: -84.39, lat: 33.75, zip: "30303" },
-  { name: "Miami", lng: -80.19, lat: 25.76, zip: "33139" },
-  { name: "New York", lng: -74.0, lat: 40.71, zip: "10012" },
-  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216" },
-  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127" },
+  { name: "Seattle", lng: -122.33, lat: 47.61, zip: "98101", state: "WA" },
+  { name: "San Francisco", lng: -122.42, lat: 37.77, zip: "94110", state: "CA" },
+  { name: "Los Angeles", lng: -118.24, lat: 34.05, zip: "90012", state: "CA" },
+  { name: "Denver", lng: -104.99, lat: 39.74, zip: "80202", state: "CO" },
+  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", state: "TX" },
+  { name: "Houston", lng: -95.37, lat: 29.76, zip: "77002", state: "TX" },
+  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", state: "IL" },
+  { name: "Atlanta", lng: -84.39, lat: 33.75, zip: "30303", state: "GA" },
+  { name: "Miami", lng: -80.19, lat: 25.76, zip: "33139", state: "FL" },
+  { name: "New York", lng: -74.0, lat: 40.71, zip: "10012", state: "NY" },
+  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", state: "NY" },
+  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", state: "MA" },
 ];
-const CITY_BY_NAME: Record<string, City> = Object.fromEntries(
-  CITIES.map((c) => [c.name, c]),
-);
+function citiesInState(abbr: string): City[] {
+  return CITIES.filter((c) => c.state === abbr);
+}
 
 // Score → color ramp, tuned for a dark backdrop.
 const TIER_COLORS = [
@@ -103,23 +141,79 @@ function tierOf(score: number): number {
   return 0;
 }
 
-// Geographic anchors drawn on the resolved map — now also click targets that
-// fly the globe to that metro.
-const ANCHORS: { name: string; lng: number; lat: number }[] = [
-  { name: "Seattle", lng: -122.33, lat: 47.61 },
-  { name: "San Francisco", lng: -122.42, lat: 37.77 },
-  { name: "Los Angeles", lng: -118.24, lat: 34.05 },
-  { name: "Denver", lng: -104.99, lat: 39.74 },
-  { name: "Houston", lng: -95.37, lat: 29.76 },
-  { name: "Chicago", lng: -87.63, lat: 41.88 },
-  { name: "Atlanta", lng: -84.39, lat: 33.75 },
-  { name: "Miami", lng: -80.19, lat: 25.76 },
-  { name: "New York", lng: -74.0, lat: 40.71 },
-  { name: "Boston", lng: -71.06, lat: 42.36 },
+// All 50 states, each framed by an approximate bounding box
+// [minLng, minLat, maxLng, maxLat]. Center + span are derived from the box.
+// Drawn as clickable abbreviations on the resolved U.S. map; picking one flies
+// the globe to frame that state and reveals the metros inside it.
+const STATE_BOXES: { name: string; abbr: string; box: [number, number, number, number] }[] = [
+  { name: "Alabama", abbr: "AL", box: [-88.5, 30.2, -84.9, 35.0] },
+  { name: "Alaska", abbr: "AK", box: [-170.0, 54.0, -130.0, 71.5] },
+  { name: "Arizona", abbr: "AZ", box: [-114.8, 31.3, -109.0, 37.0] },
+  { name: "Arkansas", abbr: "AR", box: [-94.6, 33.0, -89.6, 36.5] },
+  { name: "California", abbr: "CA", box: [-124.4, 32.5, -114.1, 42.0] },
+  { name: "Colorado", abbr: "CO", box: [-109.06, 37.0, -102.04, 41.0] },
+  { name: "Connecticut", abbr: "CT", box: [-73.7, 40.98, -71.8, 42.05] },
+  { name: "Delaware", abbr: "DE", box: [-75.8, 38.45, -75.05, 39.84] },
+  { name: "Florida", abbr: "FL", box: [-87.6, 24.5, -80.0, 31.0] },
+  { name: "Georgia", abbr: "GA", box: [-85.6, 30.4, -80.8, 35.0] },
+  { name: "Hawaii", abbr: "HI", box: [-160.3, 18.9, -154.8, 22.3] },
+  { name: "Idaho", abbr: "ID", box: [-117.2, 42.0, -111.0, 49.0] },
+  { name: "Illinois", abbr: "IL", box: [-91.5, 37.0, -87.0, 42.5] },
+  { name: "Indiana", abbr: "IN", box: [-88.1, 37.8, -84.8, 41.8] },
+  { name: "Iowa", abbr: "IA", box: [-96.6, 40.4, -90.1, 43.5] },
+  { name: "Kansas", abbr: "KS", box: [-102.05, 37.0, -94.6, 40.0] },
+  { name: "Kentucky", abbr: "KY", box: [-89.6, 36.5, -81.9, 39.15] },
+  { name: "Louisiana", abbr: "LA", box: [-94.05, 28.9, -88.8, 33.0] },
+  { name: "Maine", abbr: "ME", box: [-71.1, 43.0, -66.9, 47.5] },
+  { name: "Maryland", abbr: "MD", box: [-79.5, 37.9, -75.0, 39.7] },
+  { name: "Massachusetts", abbr: "MA", box: [-73.5, 41.2, -69.9, 42.9] },
+  { name: "Michigan", abbr: "MI", box: [-90.4, 41.7, -82.4, 48.3] },
+  { name: "Minnesota", abbr: "MN", box: [-97.2, 43.5, -89.5, 49.4] },
+  { name: "Mississippi", abbr: "MS", box: [-91.7, 30.2, -88.1, 35.0] },
+  { name: "Missouri", abbr: "MO", box: [-95.8, 36.0, -89.1, 40.6] },
+  { name: "Montana", abbr: "MT", box: [-116.05, 44.4, -104.04, 49.0] },
+  { name: "Nebraska", abbr: "NE", box: [-104.05, 40.0, -95.3, 43.0] },
+  { name: "Nevada", abbr: "NV", box: [-120.0, 35.0, -114.04, 42.0] },
+  { name: "New Hampshire", abbr: "NH", box: [-72.6, 42.7, -70.6, 45.3] },
+  { name: "New Jersey", abbr: "NJ", box: [-75.6, 38.9, -73.9, 41.4] },
+  { name: "New Mexico", abbr: "NM", box: [-109.05, 31.3, -103.0, 37.0] },
+  { name: "New York", abbr: "NY", box: [-79.8, 40.5, -71.85, 45.0] },
+  { name: "North Carolina", abbr: "NC", box: [-84.3, 33.8, -75.4, 36.6] },
+  { name: "North Dakota", abbr: "ND", box: [-104.05, 45.9, -96.55, 49.0] },
+  { name: "Ohio", abbr: "OH", box: [-84.8, 38.4, -80.5, 42.0] },
+  { name: "Oklahoma", abbr: "OK", box: [-103.0, 33.6, -94.4, 37.0] },
+  { name: "Oregon", abbr: "OR", box: [-124.6, 42.0, -116.5, 46.3] },
+  { name: "Pennsylvania", abbr: "PA", box: [-80.5, 39.7, -74.7, 42.3] },
+  { name: "Rhode Island", abbr: "RI", box: [-71.9, 41.15, -71.1, 42.02] },
+  { name: "South Carolina", abbr: "SC", box: [-83.4, 32.0, -78.5, 35.2] },
+  { name: "South Dakota", abbr: "SD", box: [-104.06, 42.5, -96.4, 45.95] },
+  { name: "Tennessee", abbr: "TN", box: [-90.3, 35.0, -81.6, 36.7] },
+  { name: "Texas", abbr: "TX", box: [-106.65, 25.8, -93.5, 36.5] },
+  { name: "Utah", abbr: "UT", box: [-114.05, 37.0, -109.04, 42.0] },
+  { name: "Vermont", abbr: "VT", box: [-73.44, 42.7, -71.5, 45.02] },
+  { name: "Virginia", abbr: "VA", box: [-83.7, 36.5, -75.2, 39.5] },
+  { name: "Washington", abbr: "WA", box: [-124.8, 45.5, -116.9, 49.0] },
+  { name: "West Virginia", abbr: "WV", box: [-82.65, 37.2, -77.7, 40.65] },
+  { name: "Wisconsin", abbr: "WI", box: [-92.9, 42.5, -86.8, 47.1] },
+  { name: "Wyoming", abbr: "WY", box: [-111.06, 41.0, -104.05, 45.0] },
 ];
-function cityForAnchor(a: { name: string; lng: number; lat: number }): City {
-  return CITY_BY_NAME[a.name] ?? { name: a.name, lng: a.lng, lat: a.lat, zip: "" };
-}
+const STATES: Place[] = STATE_BOXES.map((s) => {
+  const [minLng, minLat, maxLng, maxLat] = s.box;
+  return {
+    kind: "state",
+    name: s.name,
+    stateAbbr: s.abbr,
+    lng: (minLng + maxLng) / 2,
+    lat: (minLat + maxLat) / 2,
+    lngSpan: Math.max(1.4, maxLng - minLng),
+    latSpan: Math.max(1.4, maxLat - minLat),
+    fillW: STATE_FILL_W,
+    fillH: STATE_FILL_H,
+  };
+});
+const STATE_BY_ABBR: Record<string, Place> = Object.fromEntries(
+  STATES.map((s) => [s.stateAbbr as string, s]),
+);
 
 // ----- small math helpers ---------------------------------------------------
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -189,18 +283,20 @@ type ZipData = {
 
 type Hover = { x: number; y: number; zip: string; place: string; score: number } | null;
 
-// A horizontal, scrollable rail of metros. Rendered on the resolved map and
-// inside the city overlay so you can hop between cities.
+// A horizontal, scrollable rail of metros. Rendered inside a focused state (to
+// drill into its cities) and inside a focused city (to hop between siblings).
 function CityRail({
+  cities,
   activeName,
   onPick,
 }: {
+  cities: City[];
   activeName?: string;
   onPick: (c: City) => void;
 }) {
   return (
-    <div className="lgh-rail" role="group" aria-label="Jump to a city">
-      {CITIES.map((c) => (
+    <div className="lgh-rail" role="group" aria-label="Jump to a metro">
+      {cities.map((c) => (
         <button
           key={c.name}
           type="button"
@@ -215,6 +311,25 @@ function CityRail({
   );
 }
 
+// The full "jump to a state" rail, shown on the resolved U.S. map. All 50
+// states, scrollable; picking one flies the globe to frame that state.
+function StateRail({ onPick }: { onPick: (s: Place) => void }) {
+  return (
+    <div className="lgh-rail" role="group" aria-label="Jump to a state">
+      {STATES.map((s) => (
+        <button
+          key={s.stateAbbr}
+          type="button"
+          className="lgh-railbtn"
+          onClick={() => onPick(s)}
+        >
+          {s.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function GlobeLandingHero() {
   const router = useRouter();
   // Read the router through a ref inside the canvas effect so the effect can
@@ -223,10 +338,10 @@ export default function GlobeLandingHero() {
   routerRef.current = router;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<HTMLDivElement>(null);
-  const apiRef = useRef<{ flyTo: (c: City) => void; flyHome: () => void } | null>(null);
+  const apiRef = useRef<{ flyTo: (p: Place) => void; flyHome: () => void } | null>(null);
   const [progress, setProgress] = useState(0); // scroll t 0..1, mirrored for overlays
-  const [focusProg, setFocusProg] = useState(0); // city-focus f 0..1, mirrored for overlays
-  const [focusCity, setFocusCity] = useState<City | null>(null);
+  const [focusProg, setFocusProg] = useState(0); // focus f 0..1, mirrored for overlays
+  const [focusPlace, setFocusPlace] = useState<Place | null>(null);
   const [hover, setHover] = useState<Hover>(null);
   const [ready, setReady] = useState(false);
   const [query, setQuery] = useState("");
@@ -255,10 +370,13 @@ export default function GlobeLandingHero() {
       R: 300,
       usScale: 900,
       t: 0,
-      f: 0, // current city-focus progress
-      fTarget: 0, // where f is heading (0 = U.S. map, 1 = focused city)
+      f: 0, // current focus progress (0 = U.S. map, 1 = fully focused)
+      fTarget: 0, // where f is heading
       mirroredF: 0, // last f value pushed to React
-      focus: null as { lng: number; lat: number; scale: number; name: string } | null,
+      // `focus` is the destination place (+ its framing scale); `focusView` is
+      // the currently-displayed focus, eased toward `focus` for smooth re-target.
+      focus: null as (Place & { scale: number }) | null,
+      focusView: null as { lng: number; lat: number; scale: number } | null,
       autoLng: reduced ? 70 : 20,
       hoverPt: null as Hover,
       dirty: true,
@@ -270,16 +388,24 @@ export default function GlobeLandingHero() {
     let zips: ZipData | null = null;
     // last-rendered on-screen positions, for hover/click hit-tests
     let screen: { x: number; y: number; i: number }[] = [];
-    let anchorScreen: { x: number; y: number; city: City }[] = [];
+    let stateScreen: { x: number; y: number; place: Place }[] = [];
+    let cityScreen: { x: number; y: number; city: City }[] = [];
 
     const projection: GeoProjection = geoOrthographic().clipAngle(90);
     const path = geoPath(projection, ctx);
     const graticule = geoGraticule10();
 
-    function cityScaleFor(latDeg: number) {
-      const latC = (latDeg * Math.PI) / 180;
-      const sByW = (S.w * 0.9) / (CITY_SPAN_LNG * Math.cos(latC) * (Math.PI / 180));
-      const sByH = (S.h * 0.8) / (CITY_SPAN_LAT * (Math.PI / 180));
+    // Scale that frames a place's bounding span with its margin at the given lat.
+    function scaleFor(p: {
+      lat: number;
+      lngSpan: number;
+      latSpan: number;
+      fillW: number;
+      fillH: number;
+    }) {
+      const latC = (p.lat * Math.PI) / 180;
+      const sByW = (S.w * p.fillW) / (p.lngSpan * Math.cos(latC) * (Math.PI / 180));
+      const sByH = (S.h * p.fillH) / (p.latSpan * (Math.PI / 180));
       return Math.min(sByW, sByH);
     }
 
@@ -301,7 +427,10 @@ export default function GlobeLandingHero() {
       const sByW = (w * (w < 640 ? 0.98 : 0.9)) / (60 * Math.cos(latC) * (Math.PI / 180));
       const sByH = (h * 0.8) / (26 * (Math.PI / 180));
       S.usScale = Math.min(sByW, sByH);
-      if (S.focus) S.focus.scale = cityScaleFor(S.focus.lat); // keep framing on resize
+      if (S.focus) {
+        S.focus.scale = scaleFor(S.focus); // keep framing on resize
+        if (S.focusView) S.focusView.scale = S.focus.scale;
+      }
       projection.translate([w / 2, h / 2]);
       S.dirty = true;
     }
@@ -320,13 +449,13 @@ export default function GlobeLandingHero() {
       let lng = lngScroll,
         lat = latScroll,
         scale = scaleScroll;
-      if (S.focus && f > 0) {
+      if (S.focusView && f > 0) {
         const cf = smoothstep(0, 1, f);
-        const tLng = -S.focus.lng;
-        const tLat = -S.focus.lat;
+        const tLng = -S.focusView.lng;
+        const tLat = -S.focusView.lat;
         lng = lngScroll + angDelta(lngScroll, tLng) * cf;
         lat = latScroll + (tLat - latScroll) * cf;
-        scale = scaleScroll * Math.pow(S.focus.scale / scaleScroll, cf); // exp zoom
+        scale = scaleScroll * Math.pow(S.focusView.scale / scaleScroll, cf); // exp zoom
       }
       projection.scale(scale);
       projection.rotate([lng, lat, 0]);
@@ -437,30 +566,52 @@ export default function GlobeLandingHero() {
         c.restore();
       }
 
-      // orientation anchors — drawn once the map resolves; also click targets
-      anchorScreen = [];
-      if (zipAlpha > 0.35) {
-        const la = smoothstep(0.72, 0.92, tEff);
+      // Level labels + click targets. On the resolved U.S. map: state
+      // abbreviations (click → fly to that state). Focused on a state: the
+      // metros inside it (click → drill to the city). Each fades with the zoom.
+      stateScreen = [];
+      cityScreen = [];
+
+      const stateLa = smoothstep(0.72, 0.92, tEff) * (1 - smoothstep(0.12, 0.55, f));
+      if (stateLa > 0.02) {
         c.save();
-        c.globalAlpha = la * 0.85;
-        c.font = '600 11px var(--font-sans, ui-sans-serif), system-ui, sans-serif';
+        c.globalAlpha = stateLa;
+        c.font = '700 12px var(--font-sans, ui-sans-serif), system-ui, sans-serif';
+        c.textAlign = "center";
         c.textBaseline = "middle";
-        for (const a of ANCHORS) {
-          const p = projection([a.lng, a.lat]);
+        c.fillStyle = "rgba(226,232,240,0.92)";
+        for (const st of STATES) {
+          const p = projection([st.lng, st.lat]);
+          if (!p) continue;
+          if (p[0] < -20 || p[0] > w + 20 || p[1] < -20 || p[1] > h + 20) continue;
+          c.fillText(st.stateAbbr as string, p[0], p[1]);
+          stateScreen.push({ x: p[0], y: p[1], place: st });
+        }
+        c.restore();
+      }
+
+      const cityLa = S.focus?.kind === "state" ? smoothstep(0.4, 0.85, f) : 0;
+      if (cityLa > 0.02 && S.focus?.stateAbbr) {
+        c.save();
+        c.globalAlpha = cityLa * 0.9;
+        c.font = '600 12px var(--font-sans, ui-sans-serif), system-ui, sans-serif';
+        c.textBaseline = "middle";
+        for (const city of citiesInState(S.focus.stateAbbr)) {
+          const p = projection([city.lng, city.lat]);
           if (!p) continue;
           if (p[0] < -40 || p[0] > w + 150 || p[1] < -30 || p[1] > h + 30) continue;
           c.beginPath();
-          c.arc(p[0], p[1], 2.6, 0, 2 * Math.PI);
-          c.fillStyle = "rgba(255,255,255,0.9)";
+          c.arc(p[0], p[1], 3.2, 0, 2 * Math.PI);
+          c.fillStyle = "rgba(255,255,255,0.95)";
           c.fill();
           c.beginPath();
-          c.arc(p[0], p[1], 5.2, 0, 2 * Math.PI);
-          c.strokeStyle = "rgba(255,255,255,0.35)";
+          c.arc(p[0], p[1], 6, 0, 2 * Math.PI);
+          c.strokeStyle = "rgba(255,255,255,0.4)";
           c.lineWidth = 1;
           c.stroke();
-          c.fillStyle = "rgba(226,232,240,0.9)";
-          c.fillText(a.name, p[0] + 9, p[1]);
-          anchorScreen.push({ x: p[0], y: p[1], city: cityForAnchor(a) });
+          c.fillStyle = "rgba(236,240,248,0.95)";
+          c.fillText(city.name, p[0] + 10, p[1]);
+          cityScreen.push({ x: p[0], y: p[1], city });
         }
         c.restore();
       }
@@ -497,15 +648,24 @@ export default function GlobeLandingHero() {
       }
     }
 
-    // ---- city fly-to -------------------------------------------------------
-    function flyTo(c: City) {
-      S.focus = { lng: c.lng, lat: c.lat, scale: cityScaleFor(c.lat), name: c.name };
+    // ---- fly-to (state or city) -------------------------------------------
+    function flyTo(p: Place) {
+      const dest = { ...p, scale: scaleFor(p) };
+      const wasFocused = !!S.focusView && S.f > 0.02;
+      S.focus = dest;
+      // First fly-in from the map: snap the displayed view to the destination so
+      // the motion is driven purely by f. Re-targeting while already zoomed in
+      // instead leaves focusView where it is and eases it across, so drilling
+      // state→city (or hopping city→city) glides instead of cutting.
+      if (!wasFocused) {
+        S.focusView = { lng: p.lng, lat: p.lat, scale: dest.scale };
+      }
       S.fTarget = 1;
       S.dirty = true;
-      setFocusCity(c);
+      setFocusPlace(p);
     }
     function flyHome() {
-      S.fTarget = 0; // frame() clears S.focus + focusCity when f reaches 0
+      S.fTarget = 0; // frame() clears S.focus + focusView + focusPlace at f=0
       S.dirty = true;
     }
     apiRef.current = { flyTo, flyHome };
@@ -520,13 +680,30 @@ export default function GlobeLandingHero() {
         S.autoLng = (S.autoLng + SPIN_DEG_PER_SEC * dt) % 360;
         S.dirty = true;
       }
-      // ease the city-focus progress toward its target
+      // ease the focus progress toward its target
       if (S.f !== S.fTarget) {
         const step = dt / (reduced ? 0.001 : FLY_SECONDS);
         S.f =
           S.fTarget > S.f ? Math.min(S.fTarget, S.f + step) : Math.max(S.fTarget, S.f - step);
-        if (S.f === 0 && S.fTarget === 0) S.focus = null;
+        if (S.f === 0 && S.fTarget === 0) {
+          S.focus = null;
+          S.focusView = null;
+        }
         S.dirty = true;
+      }
+      // ease the displayed focus toward its destination — this is what makes a
+      // state→city drill (or a city→city hop) glide while already zoomed in.
+      if (S.focus && S.focusView && S.f > 0.001) {
+        const k = reduced ? 1 : 1 - Math.exp(-dt / RETARGET_TAU);
+        const dLng = angDelta(S.focusView.lng, S.focus.lng);
+        const dLat = S.focus.lat - S.focusView.lat;
+        const lr = Math.log(S.focus.scale / S.focusView.scale);
+        if (Math.abs(dLng) > 1e-3 || Math.abs(dLat) > 1e-3 || Math.abs(lr) > 1e-3) {
+          S.focusView.lng += dLng * k;
+          S.focusView.lat += dLat * k;
+          S.focusView.scale *= Math.exp(lr * k);
+          S.dirty = true;
+        }
       }
       // mirror f to React (throttled) so overlays cross-fade in sync
       if (
@@ -535,7 +712,7 @@ export default function GlobeLandingHero() {
       ) {
         S.mirroredF = S.f;
         setFocusProg(S.f);
-        if (S.f === 0) setFocusCity(null);
+        if (S.f === 0) setFocusPlace(null);
       }
       if (S.dirty) {
         S.dirty = false;
@@ -569,17 +746,26 @@ export default function GlobeLandingHero() {
           }
         }
 
-        // cursor: pointer over a ZIP dot or a city label
+        // cursor: pointer over a ZIP dot, a city label, or a state label
         let overAnchor = false;
         if (best === -1) {
-          for (const a of anchorScreen) {
+          for (const a of cityScreen) {
             const dx = a.x - mx,
               dy = a.y - my;
-            if (dx * dx + dy * dy < 24 * 24) {
+            if (dx * dx + dy * dy < 26 * 26) {
               overAnchor = true;
               break;
             }
           }
+          if (!overAnchor)
+            for (const s of stateScreen) {
+              const dx = s.x - mx,
+                dy = s.y - my;
+              if (dx * dx + dy * dy < 20 * 20) {
+                overAnchor = true;
+                break;
+              }
+            }
         }
         canvas.style.cursor = best !== -1 || overAnchor ? "pointer" : "default";
 
@@ -613,7 +799,7 @@ export default function GlobeLandingHero() {
       }
     }
 
-    // ---- click: ZIP → dashboard, city label → fly-to ----------------------
+    // ---- click: state → drill to state, city → drill to city, ZIP → open --
     function onClick(ev: MouseEvent) {
       const mx = ev.clientX,
         my = ev.clientY;
@@ -639,7 +825,7 @@ export default function GlobeLandingHero() {
       const hitCity = () => {
         let bc: City | null = null,
           bcD = 26 * 26;
-        for (const a of anchorScreen) {
+        for (const a of cityScreen) {
           const dx = a.x - mx,
             dy = a.y - my;
           const d = dx * dx + dy * dy;
@@ -649,17 +835,35 @@ export default function GlobeLandingHero() {
           }
         }
         if (!bc) return false;
-        flyTo(bc);
+        flyTo(cityPlace(bc));
         return true;
       };
-      // Zoomed into a city → ZIPs win (open one); on the U.S. map → cities win
-      // (zoom in). Either way the other is the fallback.
-      if (S.f >= 0.55) {
-        if (hitZip()) return;
-        hitCity();
-      } else {
-        if (hitCity()) return;
+      const hitState = () => {
+        let bp: Place | null = null,
+          bpD = 22 * 22;
+        for (const s of stateScreen) {
+          const dx = s.x - mx,
+            dy = s.y - my;
+          const d = dx * dx + dy * dy;
+          if (d < bpD) {
+            bpD = d;
+            bp = s.place;
+          }
+        }
+        if (!bp) return false;
+        flyTo(bp);
+        return true;
+      };
+      // Priority follows the current zoom level: at a city, only ZIPs are live;
+      // in a state, a metro drills deeper (else the ZIP under the cursor opens);
+      // on the U.S. map, a state label zooms in (else a ZIP fallback opens).
+      const kind = S.focus?.kind;
+      if (kind === "city") {
         hitZip();
+      } else if (kind === "state") {
+        if (!hitCity()) hitZip();
+      } else {
+        if (!hitState()) hitZip();
       }
     }
 
@@ -731,15 +935,15 @@ export default function GlobeLandingHero() {
     };
   }, []);
 
-  // Lock page scroll while a city is focused, so scroll can't fight the fly-to.
+  // Lock page scroll while a place is focused, so scroll can't fight the fly-to.
   useEffect(() => {
-    if (!focusCity) return;
+    if (!focusPlace) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [focusCity]);
+  }, [focusPlace]);
 
   // ---- hero search -----------------------------------------------------------
   function goToZip(zip: string) {
@@ -755,17 +959,30 @@ export default function GlobeLandingHero() {
       setZipError(true);
     }
   }
-  const flyTo = (c: City) => apiRef.current?.flyTo(c);
+  const flyToPlace = (p: Place) => apiRef.current?.flyTo(p);
+  const flyToCity = (c: City) => apiRef.current?.flyTo(cityPlace(c));
+  // Back steps out one level: a city returns to its parent state (if known),
+  // a state returns to the U.S. map.
+  function flyBack() {
+    const p = focusPlace;
+    if (p?.kind === "city" && p.stateAbbr && STATE_BY_ABBR[p.stateAbbr]) {
+      apiRef.current?.flyTo(STATE_BY_ABBR[p.stateAbbr]);
+    } else {
+      apiRef.current?.flyHome();
+    }
+  }
+  const focusSiblings =
+    focusPlace?.stateAbbr ? citiesInState(focusPlace.stateAbbr) : [];
 
   // Overlay opacities: intro + map fade out as you scroll AND as you fly into a
-  // city; the city overlay fades in with the fly. focusProg keeps them in sync
+  // place; the focus overlay fades in with the fly. focusProg keeps them in sync
   // with the globe animation.
   const introOpacity = (1 - smoothstep(0, 0.22, progress)) * (1 - focusProg);
   const mapOpacity = smoothstep(0.66, 0.92, progress) * (1 - focusProg);
-  const cityOpacity = focusProg;
+  const focusOpacity = focusProg;
   const introInteractive = introOpacity > 0.15;
   const mapInteractive = mapOpacity > 0.6;
-  const cityInteractive = cityOpacity > 0.5;
+  const focusInteractive = focusOpacity > 0.5;
 
   return (
     <div className="lgh">
@@ -860,7 +1077,7 @@ export default function GlobeLandingHero() {
                   <button
                     key={m.name}
                     type="button"
-                    onClick={() => flyTo(m)}
+                    onClick={() => flyToCity(m)}
                     className="lgh-chip"
                     style={{ borderColor: m.color, color: m.color }}
                   >
@@ -889,45 +1106,70 @@ export default function GlobeLandingHero() {
             <div className="lgh-mapcopy">
               <h2 className="lgh-maptitle">Every ZIP, one score.</h2>
               <p className="lgh-mapsub">
-                Brighter is a stronger five-year appreciation signal. Click a city
-                to zoom in — or any ZIP to open it.
+                Brighter is a stronger five-year appreciation signal. Click a
+                state to zoom in — or any ZIP to open it.
               </p>
               <div className="lgh-legend">
                 <span className="lgh-legend-label">Lower</span>
                 <span className="lgh-legend-ramp" />
                 <span className="lgh-legend-label">Higher</span>
               </div>
-              <CityRail onPick={flyTo} />
+              <StateRail onPick={flyToPlace} />
             </div>
           </div>
 
-          {/* CITY overlay — fades in when you fly to a metro */}
+          {/* FOCUS overlay — fades in when you fly into a state or a city */}
           <div
             className="lgh-overlay lgh-city"
-            style={{ opacity: cityOpacity }}
-            data-active={cityInteractive ? "true" : undefined}
-            aria-hidden={cityInteractive ? undefined : true}
+            style={{ opacity: focusOpacity }}
+            data-active={focusInteractive ? "true" : undefined}
+            aria-hidden={focusInteractive ? undefined : true}
           >
-            <button
-              type="button"
-              className="lgh-back"
-              onClick={() => apiRef.current?.flyHome()}
-            >
-              ← Back to map
+            <button type="button" className="lgh-back" onClick={flyBack}>
+              ←{" "}
+              {focusPlace?.kind === "city" &&
+              focusPlace.stateAbbr &&
+              STATE_BY_ABBR[focusPlace.stateAbbr]
+                ? `Back to ${STATE_BY_ABBR[focusPlace.stateAbbr].name}`
+                : "Back to U.S. map"}
             </button>
             <div className="lgh-citycopy">
               <div className="lgh-citykicker">Now viewing</div>
-              <h2 className="lgh-citytitle">{focusCity?.name ?? ""}</h2>
-              <p className="lgh-citysub">
-                Each point is a scored ZIP. Hover to inspect it, click to open it
-                on the dashboard.
-              </p>
-              {focusCity?.zip ? (
-                <a className="lgh-mapcta" href={`/dashboard?zip=${focusCity.zip}`}>
-                  Open {focusCity.name} on the dashboard →
-                </a>
-              ) : null}
-              <CityRail activeName={focusCity?.name} onPick={flyTo} />
+              <h2 className="lgh-citytitle">{focusPlace?.name ?? ""}</h2>
+
+              {focusPlace?.kind === "state" ? (
+                <>
+                  <p className="lgh-citysub">
+                    Every scored ZIP in {focusPlace.name}, colored by its
+                    five-year appreciation signal.{" "}
+                    {focusSiblings.length > 0
+                      ? "Click a metro to zoom in, or any ZIP to open it."
+                      : "Click any ZIP to open it on the dashboard."}
+                  </p>
+                  {focusSiblings.length > 0 && (
+                    <CityRail cities={focusSiblings} onPick={flyToCity} />
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="lgh-citysub">
+                    Each point is a scored ZIP. Hover to inspect it, click to open
+                    it on the dashboard.
+                  </p>
+                  {focusPlace?.zip ? (
+                    <a className="lgh-mapcta" href={`/dashboard?zip=${focusPlace.zip}`}>
+                      Open {focusPlace.name} on the dashboard →
+                    </a>
+                  ) : null}
+                  {focusSiblings.length > 1 && (
+                    <CityRail
+                      cities={focusSiblings}
+                      activeName={focusPlace?.name}
+                      onPick={flyToCity}
+                    />
+                  )}
+                </>
+              )}
             </div>
           </div>
 
