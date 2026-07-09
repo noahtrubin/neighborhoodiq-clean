@@ -1,0 +1,18 @@
+# Firebase App Hosting configuration.
+# https://firebase.google.com/docs/app-hosting/configure
+
+runConfig:
+  # Scale to zero when idle so there is no standing cost on Blaze.
+  minInstances: 0
+  maxInstances: 2
+  cpu: 1
+  memoryMiB: 512
+
+# Server-side environment variables. The key MUST be `env` (not
+# `environmentVariables`, which App Hosting silently ignores).
+# ANTHROPIC_API_KEY is a Secret Manager secret used by /api/chat at runtime.
+env:
+  - variable: ANTHROPIC_API_KEY
+    secret: ANTHROPIC_API_KEY
+    availability:
+      - RUNTIME

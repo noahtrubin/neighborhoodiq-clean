@@ -1,0 +1,12 @@
+# Explicit upload filter for `gcloud run jobs deploy --source=.`
+# (without this, gcloud falls back to .gitignore semantics, which is fragile).
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.csv
+*.local
+README.md
+deploy.sh
