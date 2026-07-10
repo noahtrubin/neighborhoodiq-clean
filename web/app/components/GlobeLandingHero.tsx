@@ -1606,7 +1606,11 @@ export default function GlobeLandingHero() {
         aria-label="Interactive globe zooming into U.S. ZIP code scores"
       >
         <div className="lgh-sticky">
-          <canvas ref={canvasRef} className="lgh-canvas" />
+          <canvas
+            ref={canvasRef}
+            className="lgh-canvas"
+            data-focused={focusPlace ? "true" : undefined}
+          />
           {!ready && (
             <div className="lgh-loading" aria-hidden="true">
               <span className="lgh-spinner" />
@@ -1853,7 +1857,11 @@ const LGH_CSS = `
   overflow: hidden;
   background: #05070f;
 }
-.lgh-canvas { position: absolute; top: 0; left: 0; display: block; }
+/* Unfocused: allow vertical page scroll so the intro globe still zooms in on
+   touch. Focused: hand ALL touch gestures to the JS engine (one-finger pan +
+   pinch-zoom), so the mobile browser's native scroll/zoom can't hijack them. */
+.lgh-canvas { position: absolute; top: 0; left: 0; display: block; touch-action: pan-y; }
+.lgh-canvas[data-focused="true"] { touch-action: none; }
 
 .lgh-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 1; pointer-events: none; }
 .lgh-spinner {
