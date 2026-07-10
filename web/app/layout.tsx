@@ -1,15 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, Plus_Jakarta_Sans } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./lib/AuthProvider";
 
-// Distinctive display (Bricolage Grotesque) for headlines, paired with a clean,
-// characterful body (Plus Jakarta Sans).
-const display = Bricolage_Grotesque({
-  subsets: ["latin"],
-  variable: "--font-display",
-  display: "swap",
-});
+// One typeface across the whole app: Plus Jakarta Sans for headings, body, and
+// data labels alike (see globals.css — the display/mono stacks alias this).
 const sans = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-sans",
@@ -29,7 +24,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#fbfbfc",
+  themeColor: "#0a1220",
 };
 
 export default function RootLayout({
@@ -38,7 +33,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${display.variable} ${sans.variable}`}>
+    <html lang="en" className={sans.variable}>
       <body>
         <AuthProvider>{children}</AuthProvider>
       </body>

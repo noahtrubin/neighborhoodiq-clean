@@ -1882,7 +1882,7 @@ const LGH_CSS = `
 .lgh-nav a { pointer-events: auto; }
 .lgh-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .lgh-word {
-  font-family: var(--font-display), sans-serif; font-weight: 600; font-size: 15px;
+  font-family: var(--font-sans-stack); font-weight: 600; font-size: 15px;
   color: var(--lgh-mist); letter-spacing: -0.01em;
 }
 .lgh-navright { display: flex; align-items: center; gap: 22px; margin-left: auto; }
@@ -1918,7 +1918,7 @@ const LGH_CSS = `
   color: var(--lgh-accent); margin-bottom: 22px;
 }
 .lgh-h1 {
-  font-family: var(--font-display), sans-serif; font-weight: 700;
+  font-family: var(--font-sans-stack); font-weight: 700;
   font-size: clamp(40px, 6.4vw, 66px); line-height: 1.02; letter-spacing: -0.025em;
   margin: 0 0 22px; color: var(--lgh-mist);
 }
@@ -1972,7 +1972,7 @@ const LGH_CSS = `
 .lgh-map { justify-content: flex-end; padding-bottom: 7vh; }
 .lgh-mapcopy { max-width: 620px; }
 .lgh-maptitle {
-  font-family: var(--font-display), sans-serif; font-weight: 700;
+  font-family: var(--font-sans-stack); font-weight: 700;
   font-size: clamp(28px, 4vw, 42px); letter-spacing: -0.015em; margin: 0 0 12px; color: var(--lgh-mist);
 }
 .lgh-mapsub { font-size: 15px; line-height: 1.55; color: rgba(241,244,238,0.72); margin: 0 auto 16px; max-width: 460px; }
@@ -2038,7 +2038,7 @@ const LGH_CSS = `
   color: var(--lgh-accent); margin-bottom: 8px;
 }
 .lgh-citytitle {
-  font-family: var(--font-display), sans-serif; font-weight: 700;
+  font-family: var(--font-sans-stack); font-weight: 700;
   font-size: clamp(30px, 4.6vw, 48px); letter-spacing: -0.015em; margin: 0 0 10px; color: var(--lgh-mist);
 }
 .lgh-citysub { font-size: 14.5px; line-height: 1.55; color: rgba(241,244,238,0.72); margin: 0 auto 18px; max-width: 440px; }
