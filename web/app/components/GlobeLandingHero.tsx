@@ -417,21 +417,41 @@ function CityRail({
   );
 }
 
-// The full "jump to a state" rail, shown on the resolved U.S. map. All 50
-// states, scrollable; picking one flies the globe to frame that state.
+// The "jump to a state" rail, shown on the resolved U.S. map. The 48 contiguous
+// states scroll horizontally; Alaska and Hawaii — the two you can't see on the
+// continental map — get their own designated buttons pinned below.
+const PINNED_ABBRS = ["AK", "HI"];
 function StateRail({ onPick }: { onPick: (s: Place) => void }) {
+  const contiguous = STATES.filter((s) => !PINNED_ABBRS.includes(s.stateAbbr as string));
+  const pinned = PINNED_ABBRS.map((a) => STATES.find((s) => s.stateAbbr === a)).filter(
+    (s): s is Place => Boolean(s),
+  );
   return (
-    <div className="lgh-rail" role="group" aria-label="Jump to a state">
-      {STATES.map((s) => (
-        <button
-          key={s.stateAbbr}
-          type="button"
-          className="lgh-railbtn"
-          onClick={() => onPick(s)}
-        >
-          {s.name}
-        </button>
-      ))}
+    <div className="lgh-states">
+      <div className="lgh-rail" role="group" aria-label="Jump to a state">
+        {contiguous.map((s) => (
+          <button
+            key={s.stateAbbr}
+            type="button"
+            className="lgh-railbtn"
+            onClick={() => onPick(s)}
+          >
+            {s.name}
+          </button>
+        ))}
+      </div>
+      <div className="lgh-pinned" role="group" aria-label="Jump to Alaska or Hawaii">
+        {pinned.map((s) => (
+          <button
+            key={s.stateAbbr}
+            type="button"
+            className="lgh-railbtn lgh-railbtn--pinned"
+            onClick={() => onPick(s)}
+          >
+            {s.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2002,6 +2022,18 @@ const LGH_CSS = `
 }
 .lgh-railbtn:hover { background: rgba(241,244,238,0.12); color: var(--lgh-mist); }
 .lgh-railbtn[data-active="true"] { background: var(--lgh-mist); border-color: var(--lgh-mist); color: var(--lgh-ink); font-weight: 600; }
+
+/* State selector: the scrollable contiguous rail + Alaska/Hawaii pinned below */
+.lgh-states { display: flex; flex-direction: column; align-items: center; }
+.lgh-pinned { display: flex; gap: 10px; margin-top: 10px; }
+/* Designated Alaska & Hawaii buttons — brighter so they read as intentional */
+.lgh-railbtn--pinned {
+  background: rgba(147,178,230,0.12);
+  border-color: rgba(147,178,230,0.5);
+  color: var(--lgh-mist);
+  font-weight: 600;
+}
+.lgh-railbtn--pinned:hover { background: rgba(147,178,230,0.24); border-color: rgba(147,178,230,0.7); }
 
 /* City focus overlay */
 .lgh-city { justify-content: flex-end; padding-bottom: 7vh; }
