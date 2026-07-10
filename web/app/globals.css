@@ -2,76 +2,77 @@
    NeighborhoodIQ design system
    Clean, light, minimal. Neutral near-white surfaces, near-black chrome,
    a single restrained blue accent. Color earns its place (mostly the data).
-   Display = Bricolage Grotesque (headlines), body = Plus Jakarta Sans.
+   One typeface throughout: Plus Jakarta Sans (headings, body, and labels).
    ============================================================ */
 
 :root {
-  /* ---- Surfaces (neutral near-white) ---- */
-  --bg: #fbfbfc;
-  --bg-2: #f4f5f7;
-  --glow: rgba(37, 99, 235, 0.04);
-  --surface: #ffffff;
-  --surface-2: #f6f7f9;
-  --surface-solid: #ffffff;
-  --surface-input: #ffffff;
+  /* ---- Surfaces (deep navy — matches the dark blue behind the globe) ---- */
+  --bg: #0a1220;              /* page: deep navy, ≈ the globe's ocean edge */
+  --bg-2: #0e1728;
+  --glow: rgba(56, 120, 200, 0.12);   /* the globe's blue atmosphere */
+  --surface: #13203a;        /* cards: ≈ the globe ocean disc (#12203c), elevated */
+  --surface-2: #0f1a2e;
+  --surface-solid: #13203a;
+  --surface-input: #101d34;
 
-  --border: #ececee;
-  --border-strong: #dcdde1;
-  --track: #edeef0;
-  --gauge-track: #edeef0;
+  --border: rgba(147, 178, 230, 0.14);        /* coastline blue at low alpha */
+  --border-strong: rgba(147, 178, 230, 0.26);
+  --track: rgba(147, 178, 230, 0.12);
+  --gauge-track: rgba(147, 178, 230, 0.15);
 
-  /* ---- Text ---- */
-  --ink: #18181b;
-  --ink-soft: #52525b;
-  --ink-muted: #8a8b93;
-  --ink-faint: #b4b5bc;
+  /* ---- Text (light on navy) ---- */
+  --ink: #eaf0fa;
+  --ink-soft: #b8c6de;
+  --ink-muted: #8496b4;
+  --ink-faint: #607394;
 
-  /* ---- Brand / accent (single restrained blue) ---- */
-  --brand: #1d4ed8;
-  --brand-bright: #2563eb;
-  --accent: #2563eb;
-  --accent-ink: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.1);
+  /* ---- Brand / accent (blue, brightened for dark) ---- */
+  --brand: #3b82f6;
+  --brand-bright: #60a5fa;
+  --accent: #3b82f6;
+  --accent-ink: #93b2e6;     /* light blue so links/accents read on navy */
+  --accent-soft: rgba(59, 130, 246, 0.16);
 
-  /* Primary button: near-black with white text. Chrome stays monochrome;
-     blue is reserved for links, focus, and small highlights. */
-  --btn-bg: #18181b;
-  --btn-bg-hover: #000000;
-  --btn-fg: #ffffff;
+  /* Primary button: near-white with dark ink (monochrome chrome, inverted for
+     dark); blue stays reserved for links, focus, and small highlights. */
+  --btn-bg: #eaf0fa;
+  --btn-bg-hover: #ffffff;
+  --btn-fg: #0b1220;
 
-  /* ---- Semantic score colors (clean, tuned for white) ---- */
-  --strong: #16a34a;
-  --strong-ink: #15803d;
-  --strong-bg: rgba(22, 163, 74, 0.1);
-  --moderate: #d97706;
-  --moderate-ink: #b45309;
-  --moderate-bg: rgba(217, 119, 6, 0.12);
-  --weak: #71717a;
-  --weak-ink: #52525b;
-  --weak-bg: rgba(113, 113, 122, 0.1);
-  --blue: #2563eb;
+  /* ---- Semantic score colors (brightened, tuned for navy) ---- */
+  --strong: #22c55e;
+  --strong-ink: #4ade80;
+  --strong-bg: rgba(34, 197, 94, 0.16);
+  --moderate: #f59e0b;
+  --moderate-ink: #fbbf24;
+  --moderate-bg: rgba(245, 158, 11, 0.16);
+  --weak: #8ea3c4;
+  --weak-ink: #b6c4dc;
+  --weak-bg: rgba(142, 163, 196, 0.16);
+  --blue: #60a5fa;
 
-  --danger: #dc2626;
-  --danger-bg: #fef2f2;
-  --danger-border: #fecaca;
+  --danger: #f87171;
+  --danger-bg: rgba(220, 38, 38, 0.16);
+  --danger-border: rgba(248, 113, 113, 0.4);
 
   /* ---- Shape / depth ---- */
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 16px;
   --radius-xl: 24px;
-  /* Ultra-diffuse, near-invisible depth — the flat editorial look */
-  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.03);
-  --shadow: 0 2px 8px rgba(24, 24, 27, 0.04);
-  --shadow-lg: 0 12px 32px rgba(24, 24, 27, 0.08);
-  --ring: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  /* Depth on dark: deeper, still diffuse */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --ring: 0 0 0 3px rgba(59, 130, 246, 0.35);
 
   --header-blur: 14px;
-  /* Display (Bricolage Grotesque) for headings, body (Plus Jakarta Sans). */
+  /* One typeface everywhere: headings, body, and data labels all use the same
+     sans (Plus Jakarta Sans). The serif/mono stacks are kept as aliases so the
+     many existing font-family references resolve to the single font. */
   --font-sans-stack: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-serif-stack: var(--font-display), system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Mono for data labels / codes — matches the landing hero's voice. */
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-serif-stack: var(--font-sans-stack);
+  --mono: var(--font-sans-stack);
   --shell: 1200px;
 }
 
@@ -97,13 +98,17 @@ body {
   margin: 0;
 }
 html {
-  color-scheme: light;
+  color-scheme: dark;
 }
 body {
   font-family: var(--font-sans-stack);
   color: var(--ink);
   background: var(--bg);
-  background-image: radial-gradient(1200px 560px at 50% -320px, var(--glow), transparent 70%);
+  /* Globe-like depth: a blue atmospheric glow up top, deepening to near-space at
+     the edges, over the base navy. */
+  background-image:
+    radial-gradient(1100px 520px at 50% -280px, var(--glow), transparent 70%),
+    linear-gradient(180deg, #0b1426 0%, #080f1e 100%);
   background-attachment: fixed;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
