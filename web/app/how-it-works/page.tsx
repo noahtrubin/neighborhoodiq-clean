@@ -10,7 +10,7 @@ import Logo from "../components/Logo";
 export const metadata: Metadata = {
   title: "How it works · NeighborhoodIQ",
   description:
-    "How NeighborhoodIQ scores every U.S. metro ZIP code for five-year home-price appreciation — the signals, the data, and how to read a score.",
+    "How NeighborhoodIQ estimates the chance every U.S. metro ZIP's home values rise over 2 years — the signals, the data, and how to read a score.",
 };
 
 const SIGNALS = [
@@ -27,16 +27,10 @@ const SIGNALS = [
     path: "M4 20V10M10 20V4M16 20v-7M22 20V8",
   },
   {
-    title: "Affordability",
-    body: "How much runway is left before prices bump up against local incomes and rents.",
+    title: "Affordability vs its metro",
+    body: "How cheap or expensive a ZIP is relative to its metro and state — expensive, established areas tend to hold up; the very cheapest carry more risk.",
     stroke: "#d97706",
     path: "M3 7h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7zM16 12h4v3h-4a1.5 1.5 0 0 1 0-3z",
-  },
-  {
-    title: "Location & amenities",
-    body: "Where a ZIP sits relative to jobs, businesses, and the neighborhoods moving fastest nearby.",
-    stroke: "#14b8a6",
-    path: "M12 21s6-5.3 6-10a6 6 0 1 0-12 0c0 4.7 6 10 6 10zM12 11h.01",
   },
   {
     title: "Metro context",
@@ -47,33 +41,33 @@ const SIGNALS = [
 ];
 
 const TIERS = [
-  { c: "#39506f", label: "Quiet", note: "Little forward signal — most ZIPs land here." },
-  { c: "#3f6ba6", label: "Soft", note: "Below-average appreciation signal." },
+  { c: "#39506f", label: "Quiet", note: "Least likely to rise — but rare." },
+  { c: "#3f6ba6", label: "Soft", note: "Below-average chance of rising." },
   { c: "#2f95cf", label: "Steady", note: "Around the national middle." },
-  { c: "#1fbca9", label: "Warming", note: "Above-average signal building." },
-  { c: "#40d385", label: "Strong", note: "Top-decile appreciation signal." },
-  { c: "#b6e63a", label: "Standout", note: "The rare, highest-signal ZIPs." },
+  { c: "#1fbca9", label: "Warming", note: "Above-average chance of rising." },
+  { c: "#40d385", label: "Strong", note: "Among the most likely to rise." },
+  { c: "#b6e63a", label: "Standout", note: "The highest chance of rising." },
 ];
 
 const STATS = [
-  { num: "20,306", lbl: "metro ZIP codes scored" },
+  { num: "20,892", lbl: "metro ZIP codes scored" },
   { num: "20+ yr", lbl: "of home-value history modeled" },
-  { num: "5 yr", lbl: "forward appreciation forecast" },
+  { num: "2 yr", lbl: "rise-likelihood estimate" },
   { num: "50", lbl: "states + D.C. covered" },
 ];
 
 const FAQ = [
   {
     q: "What exactly is the score?",
-    a: "A single 0–100-style ranking of how likely a ZIP code is to see strong home-price appreciation over the next five years, relative to every other metro ZIP in the country. Higher means a stronger forward signal.",
+    a: "The calibrated chance (0–100%) that a ZIP's Zillow home value is higher two years from now than today. “Calibrated” means it's honest: ZIPs the model rates around 80% actually rose about 80% of the time in out-of-time backtests.",
   },
   {
     q: "Is a high score a guarantee prices will rise?",
-    a: "No. It's a model estimate of probability, not a promise. Some lower-priced, distressed markets score high because the model sees room to run off a low base — always pair the score with your own read of a place.",
+    a: "No — it's a probability, not a promise. Most neighborhoods do rise, so most scores are high; the real signal is a low score flagging elevated risk. Out-of-time skill is modest (backtest AUC ≈ 0.66, ≈0.72 recent), and it reads today's conditions — it can't foresee a rate shock or crash. A well-informed guide, not a certainty.",
   },
   {
     q: "How fresh is the data?",
-    a: "The model retrains as new Zillow, Census, and market data lands, so scores update over time rather than being frozen at a single snapshot.",
+    a: "The model retrains monthly as new Zillow home-value data lands, so scores track the current market rather than being frozen at a single snapshot.",
   },
   {
     q: "Who is this built for?",
@@ -105,15 +99,15 @@ export default function HowItWorks() {
         <section className="glx-section hiw-hero">
           <p className="glx-kicker">What we&apos;re doing</p>
           <h1 className="hiw-h1">
-            Find the next neighborhood{" "}
-            <span className="hiw-em">before the market does.</span>
+            See any neighborhood{" "}
+            <span className="hiw-em">for what it really is.</span>
           </h1>
           <p className="glx-lead">
-            NeighborhoodIQ is a model that reads the housing market the way a
-            careful analyst would — then does it for every metro ZIP code in the
-            country at once. For each of 20,306 ZIPs, it forecasts how likely
-            home prices are to appreciate over the next five years, and turns
-            that into one score you can compare anywhere on the map.
+            NeighborhoodIQ is an honest home-value dashboard for every metro ZIP
+            code in the country. For each of 20,892 ZIPs it shows what homes cost,
+            whether prices are rising or cooling, and how the place compares to its
+            metro — plus one honest signal: the calibrated chance its value is
+            higher in 2 years. Real Zillow data, openly backtested, no hype.
           </p>
           <div className="hiw-herolinks">
             <a href="/login" className="glx-cta-btn">
@@ -128,11 +122,12 @@ export default function HowItWorks() {
         {/* Signals */}
         <section className="glx-section" style={{ paddingTop: 0 }}>
           <p className="glx-kicker">How the score works</p>
-          <h2 className="glx-h2">Five signals, one forward-looking number.</h2>
+          <h2 className="glx-h2">A few honest signals, one calibrated number.</h2>
           <p className="glx-lead">
             No single number tells you where a neighborhood is headed. The score
-            blends five families of signals, weighs them against each ZIP&apos;s
-            own history and its metro, and projects the result five years out.
+            reads each ZIP&apos;s price history, its momentum, and how it&apos;s
+            priced against its metro — all from real Zillow data — and turns them
+            into a calibrated chance of rising over the next two years.
           </p>
           <div className="glx-signals">
             {SIGNALS.map((s) => (
@@ -163,10 +158,11 @@ export default function HowItWorks() {
           <p className="glx-kicker">The data behind it</p>
           <h2 className="glx-h2">Trained on decades of real market history.</h2>
           <p className="glx-lead">
-            The model learns from a long run of Zillow home values, layered with
-            Census demographics, business and job patterns, local amenities, and
-            migration between neighborhoods. It looks at what actually preceded
-            past appreciation — then watches for the same setups forming today.
+            The model learns from 20+ years of real Zillow ZIP-level home values —
+            the level, the trend, recent momentum, and how each ZIP is priced
+            against its metro. We tested adding Census income, jobs, migration, and
+            market-demand data; none reliably improved the forecast out-of-time, so
+            we keep the model honest and use only what actually helps.
           </p>
           <div className="glx-stats">
             {STATS.map((s) => (
@@ -184,8 +180,8 @@ export default function HowItWorks() {
           <h2 className="glx-h2">Brighter means a stronger signal.</h2>
           <p className="glx-lead">
             On the map, every ZIP is a dot colored by its score. Cool blues are
-            the quiet majority; greens and lime are where the model sees the
-            strongest five-year upside. Here&apos;s the full ramp:
+            the quiet majority; greens and lime are the highest chance of
+            rising. Here&apos;s the full ramp:
           </p>
           <div className="hiw-tiers">
             {TIERS.map((t) => (
@@ -202,10 +198,11 @@ export default function HowItWorks() {
             ))}
           </div>
           <p className="hiw-caveat">
-            One honest caveat: the score is a probability estimate, not a
-            guarantee. A few low-priced, distressed markets rank high because the
-            model sees room to run off a low base — so treat a score as a
-            starting point for your own research, not financial advice.
+            One honest caveat: the score is a relative ranking, not a
+            guarantee. It rewards affordable neighborhoods whose prices are
+            actually rising — not merely the cheapest ZIPs — but its out-of-time
+            skill is modest, so treat a score as a starting point for your own
+            research, not financial advice.
           </p>
         </section>
 

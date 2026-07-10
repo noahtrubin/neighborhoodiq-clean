@@ -1,5 +1,7 @@
 // NeighborhoodIQ brand logo: a blue map pin holding a near-black house, over a
-// light-gray ground ring. Scalable SVG so it stays crisp at any size.
+// light-gray ground ring. One fixed definition — rendered identically on every
+// surface (header, dashboard, login, landing hero) and mirrored by the favicon
+// (app/icon.svg). Scalable SVG so it stays crisp at any size.
 export default function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg

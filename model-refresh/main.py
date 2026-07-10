@@ -20,8 +20,10 @@ from model import compute_scores
 
 def main() -> None:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCLOUD_PROJECT")
-    train_base = int(os.environ.get("TRAIN_BASE", "2019"))
-    # default: forecast from the LATEST available data year (set SCORE_BASE to pin)
+    # default: train on the most recent complete episode (score_base - HORIZON) and
+    # forecast from the LATEST available data year. Set TRAIN_BASE/SCORE_BASE to pin.
+    _tb = os.environ.get("TRAIN_BASE")
+    train_base = int(_tb) if _tb else None
     _sb = os.environ.get("SCORE_BASE")
     score_base = int(_sb) if _sb else None
     dry_run = bool(os.environ.get("DRY_RUN"))
@@ -38,6 +40,10 @@ def main() -> None:
         return
 
     from firestore_writer import write_scores  # imported late so DRY_RUN needs no creds
+    # Note: records carry model-computed appr5yr/momentum (annual spans). The web
+    # layer intentionally sources those two display fields from the committed,
+    # chart-aligned bundle (see web/app/lib/scores.ts::withBundle), so they stay
+    # consistent with the price chart regardless of what Firestore holds.
     write_scores(out["records"], out["metrics"], out["meta"], project=project)
     print("refresh complete")
 

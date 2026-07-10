@@ -14,6 +14,11 @@ import {
   geoBounds,
   type GeoProjection,
 } from "d3-geo";
+import { Delaunay } from "d3-delaunay";
+import { feature as topoFeature, mesh as topoMesh } from "topojson-client";
+import type { Topology, Objects } from "topojson-specification";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
+import Logo from "./Logo";
 
 /**
  * GlobeLandingHero — the landing hero merged with the scroll-driven globe.
@@ -63,6 +68,24 @@ const STATE_FILL_W = 0.82,
 // re-target while already zoomed in (state→city drill, city→city hop).
 const RETARGET_TAU = 0.26;
 
+// Per-ZIP borders. Zoomed into a state we draw REAL Census ZCTA polygons,
+// simplified and split per state under public/geo/zcta/ (~8MB total, one file
+// lazy-loaded per state on first visit — see that folder's README to
+// regenerate). Until a state's file lands (or if it fails, or on the free-zoom
+// U.S. map with no state focus) we fall back to tessellating the visible ZIP
+// centroids into Voronoi cells. Either way, boundaries cross-fade in as the
+// view narrows (measured in degrees of longitude across the viewport).
+const ZIP_BORDER_FADE_HI = 6.5; // deg across: cells start appearing below this
+const ZIP_BORDER_FADE_LO = 2.5; // deg across: cells fully in below this
+const ZIP_CELL_MAXPTS = 5000; // don't tessellate more points than this
+const ZIP_CELL_MAX_AREA_FRAC = 0.05; // skip sprawling edge cells above this area
+
+// How far the user can free-zoom relative to a place's framed view (wheel /
+// pinch / drag / ±). ZOOM_MIN < 1 lets you pull back a little past the frame so
+// the "−" control (and zoom-out gestures) always do something at the frame.
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 16;
+
 // A place the globe can fly to. `kind` drives the overlay copy + drill behavior;
 // span/fill drive how tightly it frames; `stateAbbr` links a city to its parent
 // state (for the Back button) or holds a state's own abbreviation.
@@ -96,32 +119,23 @@ function cityPlace(c: City): Place {
 }
 
 // Metro chips in the hero — quick "zoom straight to this city" shortcuts.
-const METROS: (City & { color: string })[] = [
-  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", state: "MA", color: "var(--lgh-moss)" },
-  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", state: "TX", color: "var(--lgh-gold)" },
-  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", state: "IL", color: "var(--lgh-teal)" },
-  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", state: "NY", color: "var(--lgh-coral)" },
+const METROS: City[] = [
+  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", state: "MA" },
+  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", state: "TX" },
+  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", state: "IL" },
+  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", state: "NY" },
 ];
 
-// Curated metros — drill targets shown inside a focused state, and sibling
-// rails for hopping between cities in the same state.
-const CITIES: City[] = [
-  { name: "Seattle", lng: -122.33, lat: 47.61, zip: "98101", state: "WA" },
-  { name: "San Francisco", lng: -122.42, lat: 37.77, zip: "94110", state: "CA" },
-  { name: "Los Angeles", lng: -118.24, lat: 34.05, zip: "90012", state: "CA" },
-  { name: "Denver", lng: -104.99, lat: 39.74, zip: "80202", state: "CO" },
-  { name: "Austin", lng: -97.74, lat: 30.27, zip: "78704", state: "TX" },
-  { name: "Houston", lng: -95.37, lat: 29.76, zip: "77002", state: "TX" },
-  { name: "Chicago", lng: -87.63, lat: 41.88, zip: "60647", state: "IL" },
-  { name: "Atlanta", lng: -84.39, lat: 33.75, zip: "30303", state: "GA" },
-  { name: "Miami", lng: -80.19, lat: 25.76, zip: "33139", state: "FL" },
-  { name: "New York", lng: -74.0, lat: 40.71, zip: "10012", state: "NY" },
-  { name: "Brooklyn", lng: -73.95, lat: 40.65, zip: "11216", state: "NY" },
-  { name: "Boston", lng: -71.06, lat: 42.36, zip: "02127", state: "MA" },
-];
-function citiesInState(abbr: string): City[] {
-  return CITIES.filter((c) => c.state === abbr);
-}
+// Cities aren't hand-picked — they're derived at runtime from the ZIP dataset
+// (every ZIP carries a "City, ST" label), so *any* city is zoomable. These tune
+// how many surface per state and how a city is framed from its own ZIP spread.
+const RAIL_PER_STATE = 12; // cities listed in a focused state's rail
+const LABELS_PER_STATE = 8; // cities labeled on the globe at state zoom
+const CITY_PAD = 1.6; // pad a city's ZIP bounding box before framing it
+const CITY_MIN_LNG = 0.35,
+  CITY_MIN_LAT = 0.28; // floor, so a one-ZIP town doesn't zoom to the moon
+const CITY_MAX_LNG = 4.5,
+  CITY_MAX_LAT = 3.4; // ceiling, so a sprawling metro still reads as a city
 
 // Score → color ramp, tuned for a dark backdrop.
 const TIER_COLORS = [
@@ -283,6 +297,98 @@ type ZipData = {
 
 type Hover = { x: number; y: number; zip: string; place: string; score: number } | null;
 
+// Group the loaded ZIPs into cities by their "City, ST" label, framing each city
+// by the bounding box of its own ZIPs and picking its highest-scoring ZIP as the
+// representative. Returns the top cities per state (most ZIPs first) for the
+// rails/labels, plus a full label→Place lookup so a click on ANY ZIP dot can
+// zoom to its city (not just the top-rail ones).
+function buildCityIndex(z: ZipData): {
+  byState: Record<string, Place[]>;
+  byLabel: Map<string, Place>;
+} {
+  type Acc = {
+    name: string;
+    st: string;
+    n: number;
+    sLng: number;
+    sLat: number;
+    minLng: number;
+    minLat: number;
+    maxLng: number;
+    maxLat: number;
+    bestScore: number;
+    bestZip: string;
+  };
+  const acc = new Map<string, Acc>();
+  for (let i = 0; i < z.n; i++) {
+    const place = z.place[i];
+    const ci = place.lastIndexOf(", ");
+    if (ci < 1) continue;
+    const st = place.slice(ci + 2);
+    if (st.length !== 2 || !STATE_BY_ABBR[st]) continue; // skip multi-state rollups
+    const lng = z.lng[i],
+      lat = z.lat[i],
+      score = z.score[i],
+      zip = z.zip[i];
+    let a = acc.get(place);
+    if (!a) {
+      a = {
+        name: place.slice(0, ci),
+        st,
+        n: 0,
+        sLng: 0,
+        sLat: 0,
+        minLng: Infinity,
+        minLat: Infinity,
+        maxLng: -Infinity,
+        maxLat: -Infinity,
+        bestScore: -1,
+        bestZip: zip,
+      };
+      acc.set(place, a);
+    }
+    a.n++;
+    a.sLng += lng;
+    a.sLat += lat;
+    if (lng < a.minLng) a.minLng = lng;
+    if (lng > a.maxLng) a.maxLng = lng;
+    if (lat < a.minLat) a.minLat = lat;
+    if (lat > a.maxLat) a.maxLat = lat;
+    if (score > a.bestScore) {
+      a.bestScore = score;
+      a.bestZip = zip;
+    }
+  }
+  const byStateAll: Record<string, { place: Place; n: number }[]> = {};
+  const byLabel = new Map<string, Place>();
+  for (const [label, a] of acc) {
+    const lngSpan = clamp((a.maxLng - a.minLng) * CITY_PAD, CITY_MIN_LNG, CITY_MAX_LNG);
+    const latSpan = clamp((a.maxLat - a.minLat) * CITY_PAD, CITY_MIN_LAT, CITY_MAX_LAT);
+    const place: Place = {
+      kind: "city",
+      name: a.name,
+      lng: a.sLng / a.n,
+      lat: a.sLat / a.n,
+      lngSpan,
+      latSpan,
+      fillW: CITY_FILL_W,
+      fillH: CITY_FILL_H,
+      zip: a.bestZip,
+      stateAbbr: a.st,
+    };
+    byLabel.set(label, place);
+    (byStateAll[a.st] ??= []).push({ place, n: a.n });
+  }
+  const byState: Record<string, Place[]> = {};
+  for (const st of Object.keys(byStateAll)) {
+    byState[st] = byStateAll[st]
+      .sort((x, y) => y.n - x.n)
+      .slice(0, RAIL_PER_STATE)
+      .map((e) => e.place);
+  }
+  return { byState, byLabel };
+}
+
 // A horizontal, scrollable rail of metros. Rendered inside a focused state (to
 // drill into its cities) and inside a focused city (to hop between siblings).
 function CityRail({
@@ -290,12 +396,12 @@ function CityRail({
   activeName,
   onPick,
 }: {
-  cities: City[];
+  cities: Place[];
   activeName?: string;
-  onPick: (c: City) => void;
+  onPick: (c: Place) => void;
 }) {
   return (
-    <div className="lgh-rail" role="group" aria-label="Jump to a metro">
+    <div className="lgh-rail" role="group" aria-label="Jump to a city">
       {cities.map((c) => (
         <button
           key={c.name}
@@ -338,7 +444,16 @@ export default function GlobeLandingHero() {
   routerRef.current = router;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<HTMLDivElement>(null);
-  const apiRef = useRef<{ flyTo: (p: Place) => void; flyHome: () => void } | null>(null);
+  const apiRef = useRef<{
+    flyTo: (p: Place) => void;
+    flyHome: () => void;
+    zoomBy: (g: number) => void;
+  } | null>(null);
+  // Cities derived from the ZIP data (see buildCityIndex), keyed by state abbr.
+  // Lives in a ref so the canvas engine can read it; `indexReady` flips once it's
+  // built so the React overlays (rails) re-render and pick it up.
+  const cityIndexRef = useRef<Record<string, Place[]>>({});
+  const [indexReady, setIndexReady] = useState(false);
   const [progress, setProgress] = useState(0); // scroll t 0..1, mirrored for overlays
   const [focusProg, setFocusProg] = useState(0); // focus f 0..1, mirrored for overlays
   const [focusPlace, setFocusPlace] = useState<Place | null>(null);
@@ -377,19 +492,85 @@ export default function GlobeLandingHero() {
       // the currently-displayed focus, eased toward `focus` for smooth re-target.
       focus: null as (Place & { scale: number }) | null,
       focusView: null as { lng: number; lat: number; scale: number } | null,
+      // free zoom/pan the user layers on top of the focus (wheel + pinch + ±).
+      // uz is a scale multiplier; ux/uy shift the view in screen px. Reset on
+      // every fly so each place starts framed.
+      uz: 1,
+      ux: 0,
+      uy: 0,
       autoLng: reduced ? 70 : 20,
       hoverPt: null as Hover,
+      hoverIdx: -1, // index of the hovered ZIP (to light up its Voronoi cell)
       dirty: true,
       last: 0,
     };
 
     let land: any = null;
+    // Crisp U.S. layer (Census/us-atlas states): a clean national outline + real
+    // interior state borders, drawn on top of the coarse world coastline as the
+    // view zooms into the country so the U.S. reads sharply instead of blobby.
+    let usNation: Feature | null = null;
+    let usBorders: Geometry | null = null;
     let worldDots: [number, number][] = [];
     let zips: ZipData | null = null;
+    let cityIndex: Record<string, Place[]> = {}; // derived cities, by state abbr
+    let cityByLabel: Map<string, Place> = new Map(); // every city, by "City, ST"
+    let idxByZip: Map<string, number> | null = null; // ZIP code → dataset index
+
+    // Real ZCTA boundary polygons (Census cb_2020 500k, simplified + split per
+    // state; see public/geo/zcta/). Lazy-loaded the first time the user flies
+    // into a state. While a file is in flight — or if it fails — the Voronoi
+    // cells below stay on as the fallback, so borders are never just blank.
+    type ZctaFeat = { f: Feature; zip: string; bbox: [number, number, number, number] };
+    const zctaCache = new Map<string, ZctaFeat[] | "loading" | "failed">();
+    function geomBBox(g: Geometry): [number, number, number, number] {
+      let x0 = Infinity,
+        y0 = Infinity,
+        x1 = -Infinity,
+        y1 = -Infinity;
+      const scan = (c: unknown): void => {
+        const a = c as number[] | unknown[];
+        if (typeof a[0] === "number") {
+          const p = a as number[];
+          if (p[0] < x0) x0 = p[0];
+          if (p[0] > x1) x1 = p[0];
+          if (p[1] < y0) y0 = p[1];
+          if (p[1] > y1) y1 = p[1];
+        } else for (const q of a) scan(q);
+      };
+      scan((g as { coordinates: unknown }).coordinates);
+      return [x0, y0, x1, y1];
+    }
+    function ensureZcta(st: string) {
+      if (zctaCache.has(st)) return;
+      zctaCache.set(st, "loading");
+      fetch(`/geo/zcta/${st}.json`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((topo: Topology<Objects>) => {
+          const obj = topo.objects[st];
+          if (!obj) throw new Error("missing topology object");
+          const out = topoFeature(topo, obj);
+          const fc = (
+            out.type === "FeatureCollection" ? out : { type: "FeatureCollection", features: [out] }
+          ) as FeatureCollection;
+          zctaCache.set(
+            st,
+            fc.features
+              .filter((f) => f.geometry)
+              .map((f) => ({
+                f,
+                zip: String((f.properties as { zip?: string } | null)?.zip ?? ""),
+                bbox: geomBBox(f.geometry),
+              })),
+          );
+          S.dirty = true;
+        })
+        .catch(() => zctaCache.set(st, "failed"));
+    }
     // last-rendered on-screen positions, for hover/click hit-tests
     let screen: { x: number; y: number; i: number }[] = [];
     let stateScreen: { x: number; y: number; place: Place }[] = [];
-    let cityScreen: { x: number; y: number; city: City }[] = [];
+    let cityScreen: { x: number; y: number; place: Place }[] = [];
 
     const projection: GeoProjection = geoOrthographic().clipAngle(90);
     const path = geoPath(projection, ctx);
@@ -457,8 +638,13 @@ export default function GlobeLandingHero() {
         lat = latScroll + (tLat - latScroll) * cf;
         scale = scaleScroll * Math.pow(S.focusView.scale / scaleScroll, cf); // exp zoom
       }
-      projection.scale(scale);
+      // Apply the user's free zoom/pan (wheel + pinch) on top of the scripted
+      // scroll/focus framing, so you can push in past the preset city frame down
+      // to individual ZIP cells. uz=1, ux=uy=0 → identical to the scripted view.
+      const effScale = scale * S.uz;
+      projection.scale(effScale);
       projection.rotate([lng, lat, 0]);
+      projection.translate([w / 2 + S.ux, h / 2 + S.uy]);
 
       // reveal driven by whichever is further along: scroll or city-focus
       const tEff = Math.max(t, f);
@@ -472,30 +658,30 @@ export default function GlobeLandingHero() {
       c.fillStyle = "#05070f";
       c.fillRect(0, 0, w, h);
 
-      const cx = w / 2,
-        cy = h / 2;
+      const cx = w / 2 + S.ux,
+        cy = h / 2 + S.uy;
 
       // atmosphere halo (only meaningful while the globe is small)
-      if (scale < Math.max(w, h)) {
-        const halo = c.createRadialGradient(cx, cy, scale * 0.85, cx, cy, scale * 1.16);
+      if (effScale < Math.max(w, h)) {
+        const halo = c.createRadialGradient(cx, cy, effScale * 0.85, cx, cy, effScale * 1.16);
         halo.addColorStop(0, "rgba(56,120,200,0.18)");
         halo.addColorStop(1, "rgba(56,120,200,0)");
         c.fillStyle = halo;
         c.beginPath();
-        c.arc(cx, cy, scale * 1.16, 0, 2 * Math.PI);
+        c.arc(cx, cy, effScale * 1.16, 0, 2 * Math.PI);
         c.fill();
       }
 
       // ocean / planet disc
       c.beginPath();
-      c.arc(cx, cy, scale, 0, 2 * Math.PI);
+      c.arc(cx, cy, effScale, 0, 2 * Math.PI);
       const ocean = c.createRadialGradient(
-        cx - scale * 0.3,
-        cy - scale * 0.3,
-        scale * 0.1,
+        cx - effScale * 0.3,
+        cy - effScale * 0.3,
+        effScale * 0.1,
         cx,
         cy,
-        scale,
+        effScale,
       );
       ocean.addColorStop(0, "#12203c");
       ocean.addColorStop(1, "#070d1c");
@@ -535,35 +721,231 @@ export default function GlobeLandingHero() {
         c.restore();
       }
 
-      // ZIP score dots (larger as we zoom in / focus, for easy hover + click)
+      // Crisp U.S. layer — real state borders + a clean national outline that fade
+      // in as the view zooms toward the country (`e` = zoom-in progress). The
+      // orthographic back-hemisphere clip means these only draw when the U.S. faces
+      // us, so no gating by rotation is needed.
+      const usOutlineA = smoothstep(0.12, 0.46, e) * 0.9;
+      const usBorderA = smoothstep(0.24, 0.6, e) * 0.5;
+      if (usNation && usOutlineA > 0.01) {
+        c.save();
+        c.lineJoin = "round";
+        c.lineCap = "round";
+        if (usBorders && usBorderA > 0.01) {
+          c.globalAlpha = usBorderA;
+          c.beginPath();
+          path(usBorders);
+          c.strokeStyle = "#6f8bbb";
+          c.lineWidth = 0.7;
+          c.stroke();
+        }
+        c.globalAlpha = usOutlineA;
+        c.beginPath();
+        path(usNation);
+        c.strokeStyle = "#b3ccf0";
+        c.lineWidth = 1.2;
+        c.stroke();
+        c.restore();
+      }
+
+      // ZIP scores. Gather the visible ZIPs once (projecting each centroid), then
+      // render them two ways that cross-fade with zoom: dots when far out, and —
+      // as the view narrows past a few degrees across — Voronoi cells that give
+      // every ZIP a colored border.
       screen = [];
       if (zips && zipAlpha > 0.01) {
-        const size = lerp(1.0, 1.7, e) + f * 2.3;
-        c.save();
-        c.globalAlpha = zipAlpha;
-        let curTier = -1;
-        let lit = false;
+        const vx: number[] = [],
+          vy: number[] = [],
+          vt: number[] = [],
+          vi: number[] = [];
         for (let i = 0; i < zips.n; i++) {
           const p = projection([zips.lng[i], zips.lat[i]]);
           if (!p) continue;
           const x = p[0],
             y = p[1];
           if (x < -8 || x > w + 8 || y < -8 || y > h + 8) continue;
-          const tier = zips.tier[i];
-          if (tier !== curTier) {
-            curTier = tier;
-            const glow = tier >= 4;
-            if (glow !== lit) {
-              c.globalCompositeOperation = glow ? "lighter" : "source-over";
-              lit = glow;
-            }
-            c.fillStyle = TIER_COLORS[tier];
-          }
-          const s = tier >= 4 ? size + 0.8 : size;
-          c.fillRect(x - s / 2, y - s / 2, s, s);
+          vx.push(x);
+          vy.push(y);
+          vt.push(zips.tier[i]);
+          vi.push(i);
           screen.push({ x, y, i });
         }
-        c.restore();
+
+        // degrees of longitude spanned by the viewport width → cell fade
+        const latHere = S.focusView?.lat ?? US_CENTER[1];
+        const degAcross =
+          w / (effScale * (Math.PI / 180) * Math.max(0.2, Math.cos((latHere * Math.PI) / 180)));
+        const borderAlpha = smoothstep(ZIP_BORDER_FADE_HI, ZIP_BORDER_FADE_LO, degAcross);
+
+        // --- per-ZIP boundaries ---
+        // Preferred: REAL ZCTA polygons for the focused state (Census 500k,
+        // lazy-loaded per state). Fallback: Voronoi cells around centroids
+        // while the file is in flight, if it failed, or outside a state focus.
+        // cellOk tracks PER ZIP whether a boundary actually rendered — only
+        // those dots fade in the dot→boundary crossfade, so no ZIP vanishes.
+        let cellsDrawn = false;
+        let cellOk: Uint8Array | null = null;
+        const focusSt = S.focus?.stateAbbr;
+        let realFeats: ZctaFeat[] | null = null;
+        if (focusSt) {
+          const entry = zctaCache.get(focusSt);
+          if (entry === undefined) ensureZcta(focusSt);
+          else if (Array.isArray(entry)) realFeats = entry;
+        }
+        if (borderAlpha > 0.01 && realFeats && realFeats.length && idxByZip) {
+          // padded viewport window in degrees → cheap bbox cull per feature.
+          // Center it on the geography actually under the screen center, not on
+          // the focus point: invert() picks up the user's pan (S.ux/S.uy via the
+          // projection translate), so panning past the focus doesn't cull the
+          // ZCTAs you've panned TO and leave blank gaps.
+          const ctr = projection.invert?.([w / 2, h / 2]);
+          const lngHere = ctr ? ctr[0] : S.focusView?.lng ?? US_CENTER[0];
+          const latCull = ctr ? ctr[1] : latHere;
+          const degAcrossY = h / (effScale * (Math.PI / 180));
+          const wx0 = lngHere - degAcross * 0.62,
+            wx1 = lngHere + degAcross * 0.62;
+          const wy0 = latCull - degAcrossY * 0.62,
+            wy1 = latCull + degAcrossY * 0.62;
+          const drawnIdx = new Set<number>();
+          let hoverF: Feature | null = null;
+          c.save();
+          c.lineJoin = "round";
+          c.strokeStyle = "rgba(230,238,250,0.5)";
+          c.lineWidth = 0.8;
+          for (const zf of realFeats) {
+            const b = zf.bbox;
+            if (b[2] < wx0 || b[0] > wx1 || b[3] < wy0 || b[1] > wy1) continue;
+            const idx = idxByZip.get(zf.zip);
+            if (idx === undefined) continue;
+            const tier = zips.tier[idx];
+            c.beginPath();
+            path(zf.f);
+            c.globalAlpha = borderAlpha * (tier >= 4 ? 0.42 : 0.3);
+            c.fillStyle = TIER_COLORS[tier];
+            c.fill();
+            c.globalAlpha = borderAlpha * 0.55;
+            c.stroke();
+            drawnIdx.add(idx);
+            if (idx === S.hoverIdx) hoverF = zf.f;
+          }
+          // brighten the hovered ZIP's real boundary on top of the rest
+          if (hoverF) {
+            c.beginPath();
+            path(hoverF);
+            c.globalAlpha = borderAlpha;
+            c.strokeStyle = "#ffffff";
+            c.lineWidth = 1.5;
+            c.stroke();
+          }
+          c.restore();
+          if (drawnIdx.size) {
+            cellsDrawn = true;
+            cellOk = new Uint8Array(vx.length);
+            for (let k = 0; k < vi.length; k++) if (drawnIdx.has(vi[k])) cellOk[k] = 1;
+          }
+        } else if (borderAlpha > 0.01 && vx.length >= 3 && vx.length <= ZIP_CELL_MAXPTS) {
+          cellOk = new Uint8Array(vx.length);
+          const pts = new Float64Array(vx.length * 2);
+          let bxmin = Infinity,
+            bymin = Infinity,
+            bxmax = -Infinity,
+            bymax = -Infinity;
+          for (let k = 0; k < vx.length; k++) {
+            pts[2 * k] = vx[k];
+            pts[2 * k + 1] = vy[k];
+            if (vx[k] < bxmin) bxmin = vx[k];
+            if (vx[k] > bxmax) bxmax = vx[k];
+            if (vy[k] < bymin) bymin = vy[k];
+            if (vy[k] > bymax) bymax = vy[k];
+          }
+          // Clip the tessellation to the visible ZIPs' bounding box (padded)
+          // rather than the whole viewport, so peripheral cells stay compact
+          // instead of sprawling out to the edges and getting culled — which is
+          // what left the gaps where ZIPs seemed to disappear.
+          const padX = w * 0.05,
+            padY = h * 0.05;
+          const voronoi = new Delaunay(pts).voronoi([
+            Math.max(0, bxmin - padX),
+            Math.max(0, bymin - padY),
+            Math.min(w, bxmax + padX),
+            Math.min(h, bymax + padY),
+          ]);
+          const maxArea = w * h * ZIP_CELL_MAX_AREA_FRAC;
+          let hoverPoly: [number, number][] | null = null;
+          c.save();
+          c.lineJoin = "round";
+          c.lineWidth = 0.7;
+          c.strokeStyle = "rgba(230,238,250,0.5)";
+          for (let k = 0; k < vx.length; k++) {
+            const poly = voronoi.cellPolygon(k) as [number, number][] | null;
+            if (!poly || poly.length < 4) continue;
+            let area = 0;
+            for (let j = 0, l = poly.length - 1; j < poly.length; l = j++)
+              area += poly[l][0] * poly[j][1] - poly[j][0] * poly[l][1];
+            if (Math.abs(area) / 2 > maxArea) continue; // drop sprawling edge cells
+            c.beginPath();
+            c.moveTo(poly[0][0], poly[0][1]);
+            for (let j = 1; j < poly.length; j++) c.lineTo(poly[j][0], poly[j][1]);
+            c.closePath();
+            c.globalAlpha = borderAlpha * (vt[k] >= 4 ? 0.42 : 0.3);
+            c.fillStyle = TIER_COLORS[vt[k]];
+            c.fill();
+            c.globalAlpha = borderAlpha * 0.5;
+            c.stroke();
+            cellsDrawn = true;
+            cellOk![k] = 1;
+            if (vi[k] === S.hoverIdx) hoverPoly = poly;
+          }
+          // brighten the hovered ZIP's cell on top of the rest
+          if (hoverPoly) {
+            c.beginPath();
+            c.moveTo(hoverPoly[0][0], hoverPoly[0][1]);
+            for (let j = 1; j < hoverPoly.length; j++)
+              c.lineTo(hoverPoly[j][0], hoverPoly[j][1]);
+            c.closePath();
+            c.globalAlpha = borderAlpha;
+            c.strokeStyle = "#ffffff";
+            c.lineWidth = 1.4;
+            c.stroke();
+          }
+          c.restore();
+        }
+
+        // --- centroid dots ---
+        // Per-ZIP crossfade: only dots whose cell actually rendered fade out;
+        // culled-cell ZIPs keep a full dot. Dots also grow with the user's
+        // free zoom so deep city views stay readable and clickable.
+        const fadedAlpha = zipAlpha * (1 - 0.82 * (cellsDrawn ? borderAlpha : 0));
+        if (zipAlpha > 0.01) {
+          const size =
+            (lerp(1.0, 1.7, e) + f * 2.3) * clamp(Math.sqrt(S.uz), 1, 2.4);
+          c.save();
+          c.globalAlpha = fadedAlpha;
+          let curAlpha = fadedAlpha;
+          let curTier = -1;
+          let lit = false;
+          for (let k = 0; k < vx.length; k++) {
+            const tier = vt[k];
+            if (tier !== curTier) {
+              curTier = tier;
+              const glow = tier >= 4;
+              if (glow !== lit) {
+                c.globalCompositeOperation = glow ? "lighter" : "source-over";
+                lit = glow;
+              }
+              c.fillStyle = TIER_COLORS[tier];
+            }
+            const a = cellOk && cellOk[k] ? fadedAlpha : zipAlpha;
+            if (a !== curAlpha) {
+              c.globalAlpha = a;
+              curAlpha = a;
+            }
+            if (a < 0.01) continue;
+            const s = tier >= 4 ? size + 0.8 : size;
+            c.fillRect(vx[k] - s / 2, vy[k] - s / 2, s, s);
+          }
+          c.restore();
+        }
       }
 
       // Level labels + click targets. On the resolved U.S. map: state
@@ -592,14 +974,23 @@ export default function GlobeLandingHero() {
 
       const cityLa = S.focus?.kind === "state" ? smoothstep(0.4, 0.85, f) : 0;
       if (cityLa > 0.02 && S.focus?.stateAbbr) {
+        const cities = (cityIndex[S.focus.stateAbbr] ?? []).slice(0, LABELS_PER_STATE);
         c.save();
         c.globalAlpha = cityLa * 0.9;
         c.font = '600 12px var(--font-sans, ui-sans-serif), system-ui, sans-serif';
         c.textBaseline = "middle";
-        for (const city of citiesInState(S.focus.stateAbbr)) {
+        // Cities come sorted biggest-first; skip any label whose text box would
+        // collide with one already drawn, so dense metros don't overprint.
+        const drawn: { x0: number; x1: number; y0: number; y1: number }[] = [];
+        for (const city of cities) {
           const p = projection([city.lng, city.lat]);
           if (!p) continue;
           if (p[0] < -40 || p[0] > w + 150 || p[1] < -30 || p[1] > h + 30) continue;
+          const tw = c.measureText(city.name).width;
+          const box = { x0: p[0] - 8, x1: p[0] + 12 + tw, y0: p[1] - 10, y1: p[1] + 10 };
+          if (drawn.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0))
+            continue;
+          drawn.push(box);
           c.beginPath();
           c.arc(p[0], p[1], 3.2, 0, 2 * Math.PI);
           c.fillStyle = "rgba(255,255,255,0.95)";
@@ -611,7 +1002,7 @@ export default function GlobeLandingHero() {
           c.stroke();
           c.fillStyle = "rgba(236,240,248,0.95)";
           c.fillText(city.name, p[0] + 10, p[1]);
-          cityScreen.push({ x: p[0], y: p[1], city });
+          cityScreen.push({ x: p[0], y: p[1], place: city });
         }
         c.restore();
       }
@@ -649,10 +1040,17 @@ export default function GlobeLandingHero() {
     }
 
     // ---- fly-to (state or city) -------------------------------------------
+    function resetUserZoom() {
+      S.uz = 1;
+      S.ux = 0;
+      S.uy = 0;
+    }
     function flyTo(p: Place) {
+      if (p.stateAbbr) ensureZcta(p.stateAbbr); // real borders, fetched just-in-time
       const dest = { ...p, scale: scaleFor(p) };
       const wasFocused = !!S.focusView && S.f > 0.02;
       S.focus = dest;
+      resetUserZoom(); // start every place framed; the user re-zooms from there
       // First fly-in from the map: snap the displayed view to the destination so
       // the motion is driven purely by f. Re-targeting while already zoomed in
       // instead leaves focusView where it is and eases it across, so drilling
@@ -666,9 +1064,156 @@ export default function GlobeLandingHero() {
     }
     function flyHome() {
       S.fTarget = 0; // frame() clears S.focus + focusView + focusPlace at f=0
+      resetUserZoom();
       S.dirty = true;
     }
-    apiRef.current = { flyTo, flyHome };
+    // Keep the panned view from being dragged fully off-screen. There's a
+    // baseline of pan room even at the framed view (so drag-to-pan always
+    // works once focused), and it grows as the user zooms in further.
+    function clampPan() {
+      const maxX = S.w * (0.6 + Math.max(0, S.uz - 1) * 0.7);
+      const maxY = S.h * (0.6 + Math.max(0, S.uz - 1) * 0.7);
+      S.ux = clamp(S.ux, -maxX, maxX);
+      S.uy = clamp(S.uy, -maxY, maxY);
+    }
+    // Free zoom about a screen point (cursor for wheel/pinch, viewport center for
+    // the ± buttons/keys), layered on the scripted framing via S.uz / S.ux / S.uy.
+    function zoomAbout(g: number, mx: number, my: number) {
+      const uzNew = clamp(S.uz * g, ZOOM_MIN, ZOOM_MAX);
+      const ge = uzNew / S.uz;
+      if (Math.abs(ge - 1) < 1e-4) return;
+      const cx = S.w / 2,
+        cy = S.h / 2;
+      S.ux = mx + ge * (cx + S.ux - mx) - cx;
+      S.uy = my + ge * (cy + S.uy - my) - cy;
+      S.uz = uzNew;
+      clampPan();
+      S.dirty = true;
+    }
+    apiRef.current = { flyTo, flyHome, zoomBy: (g: number) => zoomAbout(g, S.w / 2, S.h / 2) };
+
+    // --- drag-to-pan (mouse) + tap/click discrimination ---------------------
+    // Once zoomed into a place you can drag the view around. `suppressClick` is
+    // set when a press ends in a real drag, so the drill click browsers fire on
+    // release doesn't teleport you into a ZIP/city you were only panning past.
+    let suppressClick = false;
+    let drag: { sx: number; sy: number; ux: number; uy: number; moved: boolean } | null = null;
+    function onDown(ev: MouseEvent) {
+      // A fresh press starts a new gesture; clear any leftover suppress flag from
+      // a prior pan that never produced a canvas click (e.g. released over a
+      // control), so it can't swallow this gesture's click.
+      suppressClick = false;
+      if (!S.focus || ev.button !== 0) return;
+      drag = { sx: ev.clientX, sy: ev.clientY, ux: S.ux, uy: S.uy, moved: false };
+      canvas.style.cursor = "grabbing";
+    }
+    function onDrag(ev: MouseEvent) {
+      if (!drag) return;
+      const dx = ev.clientX - drag.sx,
+        dy = ev.clientY - drag.sy;
+      if (!drag.moved && dx * dx + dy * dy > 16) drag.moved = true;
+      S.ux = drag.ux + dx;
+      S.uy = drag.uy + dy;
+      clampPan();
+      S.dirty = true;
+    }
+    function onUp() {
+      if (!drag) return;
+      if (drag.moved) suppressClick = true;
+      drag = null;
+      canvas.style.cursor = S.focus ? "grab" : "default";
+    }
+
+    // --- touch: pinch-to-zoom + one-finger pan (mobile) ---------------------
+    let pinch: { dist: number; cx: number; cy: number } | null = null;
+    let tpan: { sx: number; sy: number; ux: number; uy: number; moved: boolean } | null = null;
+    const touchMid = (t: TouchList) => ({
+      x: (t[0].clientX + t[1].clientX) / 2,
+      y: (t[0].clientY + t[1].clientY) / 2,
+      d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY),
+    });
+    function onTouchStart(ev: TouchEvent) {
+      // New touch gesture: clear a stale suppress flag from a prior pan. A moved
+      // touch never synthesizes a click to clear it, so without this the next tap
+      // (e.g. tapping a ZIP) would be eaten after every pan.
+      suppressClick = false;
+      if (!S.focus) return; // unfocused: let the touch scroll the intro scene
+      if (ev.touches.length >= 2) {
+        const m = touchMid(ev.touches);
+        pinch = { dist: m.d, cx: m.x, cy: m.y };
+        tpan = null;
+        ev.preventDefault();
+      } else if (ev.touches.length === 1) {
+        // one-finger pan whenever focused; a plain tap (no movement) still
+        // drills a ZIP — `moved` gates the click suppression below
+        const t = ev.touches[0];
+        tpan = { sx: t.clientX, sy: t.clientY, ux: S.ux, uy: S.uy, moved: false };
+      }
+    }
+    function onTouchMove(ev: TouchEvent) {
+      if (pinch && ev.touches.length >= 2) {
+        ev.preventDefault();
+        const m = touchMid(ev.touches);
+        zoomAbout(m.d / pinch.dist, m.x, m.y);
+        S.ux += m.x - pinch.cx; // also pan with the pinch midpoint
+        S.uy += m.y - pinch.cy;
+        clampPan();
+        pinch = { dist: m.d, cx: m.x, cy: m.y };
+        S.dirty = true;
+      } else if (tpan && ev.touches.length === 1) {
+        const t = ev.touches[0];
+        const dx = t.clientX - tpan.sx,
+          dy = t.clientY - tpan.sy;
+        if (!tpan.moved && dx * dx + dy * dy > 16) tpan.moved = true;
+        if (tpan.moved) ev.preventDefault(); // once it's a drag, don't scroll
+        S.ux = tpan.ux + dx;
+        S.uy = tpan.uy + dy;
+        clampPan();
+        S.dirty = true;
+      }
+    }
+    function onTouchEnd(ev: TouchEvent) {
+      if (tpan?.moved) suppressClick = true;
+      if (ev.touches.length === 0) {
+        pinch = null;
+        tpan = null;
+      } else if (ev.touches.length === 1) {
+        // lifted one finger of a pinch → keep panning from the finger that remains
+        pinch = null;
+        const t = ev.touches[0];
+        tpan = { sx: t.clientX, sy: t.clientY, ux: S.ux, uy: S.uy, moved: false };
+      }
+    }
+
+    // ± keys nudge the zoom when a place is focused (ignored while typing a ZIP).
+    function onKey(ev: KeyboardEvent) {
+      if (!S.focus) return;
+      const el = ev.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+      if (ev.key === "+" || ev.key === "=") {
+        ev.preventDefault();
+        zoomAbout(1.4, S.w / 2, S.h / 2);
+      } else if (ev.key === "-" || ev.key === "_") {
+        ev.preventDefault();
+        zoomAbout(1 / 1.4, S.w / 2, S.h / 2);
+      }
+    }
+
+    // wheel / trackpad-pinch → zoom, but only once focused (otherwise the wheel
+    // must stay free to drive the page scroll that runs the intro scene).
+    function onWheel(ev: WheelEvent) {
+      if (!S.focus) return;
+      ev.preventDefault();
+      let d = ev.deltaY;
+      if (ev.deltaMode === 1) d *= 16; // lines → px
+      else if (ev.deltaMode === 2) d *= S.h; // pages → px
+      // ctrlKey => trackpad pinch (small deltas): give it extra gain so a pinch
+      // moves the zoom as much as it visually implies. Regular wheel is snappier
+      // than before too, but clamped per-event so a big flick can't jump.
+      const k = ev.ctrlKey ? 0.0045 : 0.0024;
+      const g = clamp(Math.exp(-d * k), 0.4, 2.4);
+      zoomAbout(g, ev.clientX, ev.clientY);
+    }
 
     // ---- animation loop ----------------------------------------------------
     let raf = 0;
@@ -724,6 +1269,7 @@ export default function GlobeLandingHero() {
     // ---- hover hit-test + cursor ------------------------------------------
     let hoverRaf = 0;
     function onMove(ev: MouseEvent) {
+      if (drag) return; // panning: skip hover so it doesn't fight the drag
       if (hoverRaf) return;
       hoverRaf = requestAnimationFrame(() => {
         hoverRaf = 0;
@@ -767,17 +1313,22 @@ export default function GlobeLandingHero() {
               }
             }
         }
-        canvas.style.cursor = best !== -1 || overAnchor ? "pointer" : "default";
+        canvas.style.cursor =
+          best !== -1 || overAnchor ? "pointer" : S.focus ? "grab" : "default";
 
-        if (best === -1 || !z) {
+        // projection() can return null if the hovered dot rotated to the clipped
+        // back hemisphere between the last render and this throttled hit-test
+        // (e.g. mid fly-in), so guard it rather than assert non-null.
+        const p = best !== -1 && z ? projection([z.lng[best], z.lat[best]]) : null;
+        if (!p || !z) {
           if (S.hoverPt) {
             S.hoverPt = null;
+            S.hoverIdx = -1;
             setHover(null);
             S.dirty = true;
           }
           return;
         }
-        const p = projection([z.lng[best], z.lat[best]])!;
         const next: Hover = {
           x: p[0],
           y: p[1],
@@ -786,6 +1337,7 @@ export default function GlobeLandingHero() {
           score: z.score[best],
         };
         S.hoverPt = next;
+        S.hoverIdx = best;
         setHover(next);
         S.dirty = true;
       });
@@ -794,6 +1346,7 @@ export default function GlobeLandingHero() {
       canvas.style.cursor = "default";
       if (S.hoverPt) {
         S.hoverPt = null;
+        S.hoverIdx = -1;
         setHover(null);
         S.dirty = true;
       }
@@ -801,6 +1354,10 @@ export default function GlobeLandingHero() {
 
     // ---- click: state → drill to state, city → drill to city, ZIP → open --
     function onClick(ev: MouseEvent) {
+      if (suppressClick) {
+        suppressClick = false; // this click closed a drag/pan — swallow it
+        return;
+      }
       const mx = ev.clientX,
         my = ev.clientY;
       const z = zips;
@@ -819,11 +1376,21 @@ export default function GlobeLandingHero() {
           }
         }
         if (best === -1) return false;
+        // Only open the dashboard from full city zoom. From farther out (U.S.
+        // or state view) a ZIP click zooms INTO that ZIP's city first, so a
+        // click never teleports you off the map unexpectedly.
+        if (S.focus?.kind !== "city") {
+          const city = cityByLabel.get(z.place[best]);
+          if (city) {
+            flyTo(city);
+            return true;
+          }
+        }
         routerRef.current.push(`/dashboard?zip=${encodeURIComponent(z.zip[best])}`);
         return true;
       };
       const hitCity = () => {
-        let bc: City | null = null,
+        let bc: Place | null = null,
           bcD = 26 * 26;
         for (const a of cityScreen) {
           const dx = a.x - mx,
@@ -831,11 +1398,11 @@ export default function GlobeLandingHero() {
           const d = dx * dx + dy * dy;
           if (d < bcD) {
             bcD = d;
-            bc = a.city;
+            bc = a.place;
           }
         }
         if (!bc) return false;
-        flyTo(cityPlace(bc));
+        flyTo(bc);
         return true;
       };
       const hitState = () => {
@@ -881,6 +1448,18 @@ export default function GlobeLandingHero() {
     canvas.addEventListener("mousemove", onMove);
     canvas.addEventListener("mouseleave", onLeave);
     canvas.addEventListener("click", onClick);
+    // wheel on window (not just canvas) so scroll-to-zoom works even when the
+    // cursor is over the zoom buttons / Back / rail / copy overlay. onWheel is a
+    // no-op until a place is focused, so the intro page-scroll stays untouched.
+    window.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onDrag);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchEnd);
     updateProgress();
 
     // land first (fast, drives first meaningful paint), then ZIPs
@@ -893,6 +1472,16 @@ export default function GlobeLandingHero() {
         worldDots = buildWorldDots(geo);
         S.dirty = true;
         setReady(true);
+      })
+      .catch(() => {});
+
+    // Crisp U.S. borders: a clean national outline + interior state lines.
+    fetch("/geo/us-states-10m.json")
+      .then((r) => r.json())
+      .then((topo: Topology<Objects>) => {
+        usNation = topoFeature(topo, topo.objects.nation) as unknown as Feature;
+        usBorders = topoMesh(topo, topo.objects.states, (a, b) => a !== b) as Geometry;
+        S.dirty = true;
       })
       .catch(() => {});
 
@@ -919,6 +1508,15 @@ export default function GlobeLandingHero() {
           z.place[i] = r[4];
         }
         zips = z;
+        idxByZip = new Map();
+        for (let i = 0; i < n; i++) idxByZip.set(z.zip[i], i);
+        // derive the zoomable-city index from the freshly loaded ZIPs, and
+        // publish it to React so the state/city rails pick it up
+        const built = buildCityIndex(z);
+        cityIndex = built.byState;
+        cityByLabel = built.byLabel;
+        cityIndexRef.current = cityIndex;
+        setIndexReady(true);
         S.dirty = true;
       })
       .catch(() => {});
@@ -931,6 +1529,15 @@ export default function GlobeLandingHero() {
       canvas.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("mouseleave", onLeave);
       canvas.removeEventListener("click", onClick);
+      window.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onDrag);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
       apiRef.current = null;
     };
   }, []);
@@ -971,8 +1578,12 @@ export default function GlobeLandingHero() {
       apiRef.current?.flyHome();
     }
   }
-  const focusSiblings =
-    focusPlace?.stateAbbr ? citiesInState(focusPlace.stateAbbr) : [];
+  // The zoomable cities in the focused place's state (derived from the ZIP data).
+  // `indexReady` is read so this recomputes once the index finishes building.
+  const stateCities =
+    indexReady && focusPlace?.stateAbbr
+      ? cityIndexRef.current[focusPlace.stateAbbr] ?? []
+      : [];
 
   // Overlay opacities: intro + map fade out as you scroll AND as you fly into a
   // place; the focus overlay fades in with the fly. focusProg keeps them in sync
@@ -1005,7 +1616,8 @@ export default function GlobeLandingHero() {
           {/* Persistent top nav */}
           <nav className="lgh-nav">
             <a href="/" className="lgh-brand" aria-label="NeighborhoodIQ home">
-              <span className="lgh-mark">N</span>
+              {/* Identical pin mark and colors as every other page. */}
+              <Logo size={28} />
               <span className="lgh-word">NeighborhoodIQ</span>
             </a>
             <div className="lgh-navright">
@@ -1023,22 +1635,19 @@ export default function GlobeLandingHero() {
             aria-hidden={introInteractive ? undefined : true}
           >
             <div className="lgh-hero-inner">
-              <div className="lgh-badge">
-                26 years of Zillow home values · 20,306 ZIP codes scored
-              </div>
+              <div className="lgh-kicker">The honest neighborhood dashboard</div>
 
               <h1 className="lgh-h1">
-                See the next hot ZIP
+                Every neighborhood&apos;s
                 <br />
-                <span className="lgh-h1-em">before it&apos;s hot</span>
-                <span className="lgh-cursor" aria-hidden="true" />
+                home-value story.
               </h1>
 
               <p className="lgh-sub">
-                A model trained on a decade of Zillow home values, ranking where
-                five-year appreciation looks most likely — for every metro ZIP in
-                the U.S. Built for buyers and independent investors, not
-                institutional funds.
+                Real Zillow data for every U.S. metro ZIP — what homes cost,
+                whether prices are rising or cooling, and how it compares to its
+                metro. Plus an honest flag when one looks shaky. Search yours, or
+                explore the map.
               </p>
 
               <form onSubmit={handleSearch} className="lgh-form">
@@ -1071,7 +1680,7 @@ export default function GlobeLandingHero() {
                 <p className="lgh-error">Enter a 5-digit ZIP code — try 02127 or 78704.</p>
               )}
 
-              <p className="lgh-caption">Or zoom straight to a metro</p>
+              <p className="lgh-caption">Or fly to a metro</p>
               <div className="lgh-chips">
                 {METROS.map((m) => (
                   <button
@@ -1079,7 +1688,6 @@ export default function GlobeLandingHero() {
                     type="button"
                     onClick={() => flyToCity(m)}
                     className="lgh-chip"
-                    style={{ borderColor: m.color, color: m.color }}
                   >
                     {m.name}
                   </button>
@@ -1106,8 +1714,8 @@ export default function GlobeLandingHero() {
             <div className="lgh-mapcopy">
               <h2 className="lgh-maptitle">Every ZIP, one score.</h2>
               <p className="lgh-mapsub">
-                Brighter is a stronger five-year appreciation signal. Click a
-                state to zoom in — or any ZIP to open it.
+                Brighter means a higher 2-year chance of rising. Click
+                anywhere to zoom in.
               </p>
               <div className="lgh-legend">
                 <span className="lgh-legend-label">Lower</span>
@@ -1133,6 +1741,28 @@ export default function GlobeLandingHero() {
                 ? `Back to ${STATE_BY_ABBR[focusPlace.stateAbbr].name}`
                 : "Back to U.S. map"}
             </button>
+
+            {/* Free-zoom control — scroll/pinch also work; these make it obvious */}
+            <div className="lgh-zoom" role="group" aria-label="Zoom">
+              <button
+                type="button"
+                className="lgh-zoombtn"
+                aria-label="Zoom in"
+                onClick={() => apiRef.current?.zoomBy(1.8)}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="lgh-zoombtn"
+                aria-label="Zoom out"
+                onClick={() => apiRef.current?.zoomBy(1 / 1.8)}
+              >
+                −
+              </button>
+              <span className="lgh-zoomhint">Scroll or pinch to zoom · drag to pan</span>
+            </div>
+
             <div className="lgh-citycopy">
               <div className="lgh-citykicker">Now viewing</div>
               <h2 className="lgh-citytitle">{focusPlace?.name ?? ""}</h2>
@@ -1141,13 +1771,11 @@ export default function GlobeLandingHero() {
                 <>
                   <p className="lgh-citysub">
                     Every scored ZIP in {focusPlace.name}, colored by its
-                    five-year appreciation signal.{" "}
-                    {focusSiblings.length > 0
-                      ? "Click a metro to zoom in, or any ZIP to open it."
-                      : "Click any ZIP to open it on the dashboard."}
+                    2-year chance of rising. Click a city or any ZIP to
+                    zoom closer.
                   </p>
-                  {focusSiblings.length > 0 && (
-                    <CityRail cities={focusSiblings} onPick={flyToCity} />
+                  {stateCities.length > 0 && (
+                    <CityRail cities={stateCities} onPick={flyToPlace} />
                   )}
                 </>
               ) : (
@@ -1161,11 +1789,11 @@ export default function GlobeLandingHero() {
                       Open {focusPlace.name} on the dashboard →
                     </a>
                   ) : null}
-                  {focusSiblings.length > 1 && (
+                  {stateCities.length > 1 && (
                     <CityRail
-                      cities={focusSiblings}
+                      cities={stateCities}
                       activeName={focusPlace?.name}
-                      onPick={flyToCity}
+                      onPick={flyToPlace}
                     />
                   )}
                 </>
@@ -1209,12 +1837,10 @@ export default function GlobeLandingHero() {
    space colors underneath. */
 const LGH_CSS = `
 .lgh {
-  --lgh-mist: #F1F4EE;
-  --lgh-ink: #14201B;
-  --lgh-moss: #1F6F54;
-  --lgh-gold: #D89B3C;
-  --lgh-teal: #3E7A85;
-  --lgh-coral: #C1512E;
+  --lgh-mist: #f4f6f8;
+  --lgh-ink: #0b1220;
+  --lgh-accent: #5b9bff;
+  --lgh-coral: #e07856;
   --lgh-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--lgh-mist);
   background: #05070f;
@@ -1232,8 +1858,8 @@ const LGH_CSS = `
 .lgh-loading { position: absolute; inset: 0; display: grid; place-items: center; z-index: 1; pointer-events: none; }
 .lgh-spinner {
   width: 34px; height: 34px; border-radius: 50%;
-  border: 2px solid rgba(241,244,238,0.18);
-  border-top-color: var(--lgh-gold);
+  border: 2px solid rgba(244,246,248,0.18);
+  border-top-color: var(--lgh-accent);
   animation: lghSpin 0.9s linear infinite;
 }
 @keyframes lghSpin { to { transform: rotate(360deg); } }
@@ -1247,11 +1873,6 @@ const LGH_CSS = `
 }
 .lgh-nav a { pointer-events: auto; }
 .lgh-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-.lgh-mark {
-  width: 28px; height: 28px; border-radius: 8px; background: var(--lgh-gold);
-  color: var(--lgh-ink); font-family: var(--font-display), sans-serif;
-  font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center;
-}
 .lgh-word {
   font-family: var(--font-display), sans-serif; font-weight: 600; font-size: 15px;
   color: var(--lgh-mist); letter-spacing: -0.01em;
@@ -1260,7 +1881,7 @@ const LGH_CSS = `
 .lgh-navlink { font-size: 14px; color: rgba(241,244,238,0.66); text-decoration: none; transition: color 0.15s ease; }
 .lgh-navlink:hover { color: var(--lgh-mist); }
 .lgh-navcta {
-  background: var(--lgh-gold); color: var(--lgh-ink); text-decoration: none;
+  background: var(--lgh-mist); color: var(--lgh-ink); text-decoration: none;
   padding: 9px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
   transition: opacity 0.15s ease;
 }
@@ -1283,27 +1904,17 @@ const LGH_CSS = `
 }
 .lgh-hero-inner { max-width: 620px; width: 100%; }
 
-.lgh-badge {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid rgba(241,244,238,0.22); border-radius: 999px;
-  padding: 6px 15px; margin-bottom: 26px;
-  font-family: var(--lgh-mono); font-size: 11.5px; letter-spacing: 0.01em; color: var(--lgh-gold);
+.lgh-kicker {
+  font-family: var(--lgh-mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--lgh-accent); margin-bottom: 22px;
 }
 .lgh-h1 {
   font-family: var(--font-display), sans-serif; font-weight: 700;
-  font-size: clamp(38px, 6.2vw, 62px); line-height: 1.05; letter-spacing: -0.015em;
-  margin: 0 0 20px; color: var(--lgh-mist);
+  font-size: clamp(40px, 6.4vw, 66px); line-height: 1.02; letter-spacing: -0.025em;
+  margin: 0 0 22px; color: var(--lgh-mist);
 }
-.lgh-h1-em {
-  background: linear-gradient(90deg, var(--lgh-gold), var(--lgh-teal));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.lgh-cursor {
-  display: inline-block; width: 4px; height: 0.82em; background: var(--lgh-gold);
-  margin-left: 6px; vertical-align: -0.08em; animation: lghBlink 1.1s steps(1) infinite;
-}
-@keyframes lghBlink { 50% { opacity: 0; } }
-.lgh-sub { font-size: 16px; line-height: 1.6; color: rgba(241,244,238,0.7); max-width: 540px; margin: 0 auto 30px; }
+.lgh-sub { font-size: 16px; line-height: 1.65; color: rgba(244,246,248,0.68); max-width: 480px; margin: 0 auto 32px; }
 
 .lgh-form { display: flex; gap: 10px; max-width: 470px; margin: 0 auto; }
 .lgh-inputwrap {
@@ -1311,7 +1922,7 @@ const LGH_CSS = `
   background: rgba(241,244,238,0.08); border: 1px solid rgba(241,244,238,0.22);
   border-radius: 999px; padding: 13px 18px; transition: border-color 0.15s ease;
 }
-.lgh-inputwrap:focus-within { border-color: var(--lgh-gold); }
+.lgh-inputwrap:focus-within { border-color: var(--lgh-accent); }
 .lgh-input {
   border: none; outline: none; background: transparent; width: 100%;
   font-family: var(--lgh-mono); font-size: 14px; color: var(--lgh-mist);
@@ -1319,7 +1930,7 @@ const LGH_CSS = `
 .lgh-input::placeholder { color: rgba(241,244,238,0.42); }
 .lgh-analyze {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
-  background: var(--lgh-gold); color: var(--lgh-ink); border: none;
+  background: var(--lgh-mist); color: var(--lgh-ink); border: none;
   padding: 0 22px; border-radius: 999px; font-size: 14px; font-weight: 600;
   cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease;
 }
@@ -1334,11 +1945,12 @@ const LGH_CSS = `
 }
 .lgh-chips { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .lgh-chip {
-  background: transparent; border: 1px solid; border-radius: 999px;
+  background: transparent; border: 1px solid rgba(244,246,248,0.24); border-radius: 999px;
   padding: 6px 16px; font-family: var(--lgh-mono); font-size: 12.5px;
-  cursor: pointer; transition: background 0.15s ease;
+  color: rgba(244,246,248,0.82);
+  cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.lgh-chip:hover { background: rgba(241,244,238,0.08); }
+.lgh-chip:hover { background: rgba(244,246,248,0.08); border-color: var(--lgh-accent); color: var(--lgh-mist); }
 
 .lgh-scrollcue {
   position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -1357,7 +1969,7 @@ const LGH_CSS = `
 }
 .lgh-mapsub { font-size: 15px; line-height: 1.55; color: rgba(241,244,238,0.72); margin: 0 auto 16px; max-width: 460px; }
 .lgh-mapcta {
-  display: inline-block; background: var(--lgh-gold); color: var(--lgh-ink); text-decoration: none;
+  display: inline-block; background: var(--lgh-mist); color: var(--lgh-ink); text-decoration: none;
   padding: 11px 22px; border-radius: 999px; font-size: 14px; font-weight: 600;
 }
 .lgh-legend { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 4px; }
@@ -1381,7 +1993,7 @@ const LGH_CSS = `
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .lgh-railbtn:hover { background: rgba(241,244,238,0.12); color: var(--lgh-mist); }
-.lgh-railbtn[data-active="true"] { background: var(--lgh-gold); border-color: var(--lgh-gold); color: var(--lgh-ink); font-weight: 600; }
+.lgh-railbtn[data-active="true"] { background: var(--lgh-mist); border-color: var(--lgh-mist); color: var(--lgh-ink); font-weight: 600; }
 
 /* City focus overlay */
 .lgh-city { justify-content: flex-end; padding-bottom: 7vh; }
@@ -1394,10 +2006,28 @@ const LGH_CSS = `
   transition: background 0.15s ease;
 }
 .lgh-back:hover { background: rgba(10,16,28,0.85); }
+
+/* Free-zoom control, mirrored on the right of the Back button */
+.lgh-zoom {
+  position: absolute; top: 74px; right: clamp(20px, 5vw, 48px);
+  display: flex; align-items: center; gap: 8px;
+}
+.lgh-zoombtn {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: rgba(10,16,28,0.6); border: 1px solid rgba(241,244,238,0.22);
+  color: var(--lgh-mist); font-size: 20px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(6px); transition: background 0.15s ease;
+}
+.lgh-zoombtn:hover { background: rgba(10,16,28,0.9); }
+.lgh-zoomhint {
+  font-size: 12px; color: rgba(241,244,238,0.6); margin-left: 4px;
+}
+@media (max-width: 560px) { .lgh-zoomhint { display: none; } }
 .lgh-citycopy { max-width: 620px; }
 .lgh-citykicker {
   font-family: var(--lgh-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--lgh-gold); margin-bottom: 8px;
+  color: var(--lgh-accent); margin-bottom: 8px;
 }
 .lgh-citytitle {
   font-family: var(--font-display), sans-serif; font-weight: 700;
@@ -1420,6 +2050,6 @@ const LGH_CSS = `
 .lgh-tip-score[data-tier="3"] { color: #1fbca9; }
 
 @media (prefers-reduced-motion: reduce) {
-  .lgh-cursor, .lgh-scrollcue-dot, .lgh-spinner { animation: none; }
+  .lgh-scrollcue-dot, .lgh-spinner { animation: none; }
 }
 `;

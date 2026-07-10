@@ -17,13 +17,13 @@ const sans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "NeighborhoodIQ",
+  title: "NeighborhoodIQ — the honest neighborhood dashboard",
   description:
-    "A model trained on a decade of Zillow home values, forecasting where appreciation is most likely over the next five years, for every metro ZIP code in the U.S.",
+    "Real Zillow home-value data for every U.S. metro ZIP code: what homes cost, whether prices are rising or cooling, and how each place compares to its metro — plus an honest read on the risk.",
   openGraph: {
-    title: "NeighborhoodIQ",
+    title: "NeighborhoodIQ — the honest neighborhood dashboard",
     description:
-      "Forward-looking 5-year appreciation forecasts for 20,000+ U.S. metro ZIP codes.",
+      "Real home-value trends, comparisons, and an honest risk read for 20,000+ U.S. metro ZIP codes. No hype, no crystal ball.",
     type: "website",
   },
 };

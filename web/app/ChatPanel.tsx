@@ -78,7 +78,7 @@ export default function ChatPanel({
   };
 
   return (
-    <div className="niq-card" style={{ marginTop: 18, padding: 20 }}>
+    <div className="niq-card" style={{ padding: 26 }}>
       <div
         style={{
           display: "flex",
@@ -103,6 +103,7 @@ export default function ChatPanel({
 
       {messages.length > 0 && (
         <div
+          className="niq-chat-log"
           style={{
             display: "flex",
             flexDirection: "column",
