@@ -5,6 +5,7 @@ dist
 .env.*.local
 .vercel
 .DS_Store
+.vite/
 
 # Data pipeline: outputs + cached source downloads (large; regenerate with `python -m pipeline.run`)
 data/

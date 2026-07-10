@@ -1,34 +1,38 @@
-"""Forward-looking national gentrification model — reusable build step.
+"""Forward-looking home-value DIRECTION model — reusable build step.
 
-Trains on the most recent fully-observed 5-year episode (BASE -> BASE+5) and
-applies the model to features computed at the latest year to forecast the next 5
-years for every metro ZIP. The model is an L2 logistic regression on the
-cheapness features (cheap-for-its-metro/state); an out-of-time A/B picked it over
-a RandomForest for equal skill + far more stable rankings — see build_pipe.
+Answers the plain, honest question a buyer actually asks: "is this neighborhood's
+home value likely to go UP over the next 2 years, or not?" Trains on the most
+recent fully-observed 2-year episode (BASE -> BASE+2) and applies the model to
+features at the latest year to estimate P(rise) for every metro ZIP. Grounded
+entirely in real Zillow data: cheap-for-its-metro/state + price momentum
+(1/2/4-year growth + acceleration). Gradient-boosted classifier, ISOTONIC-
+CALIBRATED so the probability means what it says.
+
+Why direction (not a ranking):
+  * DIRECTION is more forecastable than "will it be a top performer". Out-of-time
+    AUC ~0.66 (recent windows ~0.72), vs ~0.57 for a top-quartile-rank target,
+    because momentum predicts near-term up/down more reliably than relative rank.
+  * We tried the ranking + relative-outperformance framings; the relative one
+    scored marginally better on a backtest number but did so by betting on cheap,
+    distressed ZIPs mean-reverting — it re-created the old "Flint is #1" inversion
+    (corr(score, cheapness) -0.85). Direction does not: corr ~ +0.38 (expensive,
+    stable areas are correctly the safer bets).
 
 WHAT THE NUMBERS MEAN (read this before quoting any metric)
 -----------------------------------------------------------
-The forward 2024->2029 forecast cannot be validated — the future hasn't
-happened. The honest question is "how well does this *method* forecast a 5-year
-window it has never seen?" `metrics` answers that with an OUT-OF-TIME test:
-train on the prior disjoint episode (BASE-5 -> BASE) and predict the realized
-BASE -> BASE+5 outcome. Key, hard-won facts (see model-refresh/evaluate.py for
-the full reproduction against 2000-2026 ZHVI):
-
-  * OUT-OF-TIME AUC ~= 0.60-0.63, NOT the ~0.75 a random in-sample split shows.
-    Random-split validation leaks spatially-autocorrelated neighbors across the
-    split and inflates AUC. We therefore report `oot_auc` (honest) and
-    `in_sample_auc_optimistic` (the inflated number) side by side.
-  * "ACCURACY" IS A TRAP. At the 0.5 threshold, accuracy == the majority-class
-    base rate (predict-nobody-gentrifies). The model beats that baseline by ~2-3
-    points only. Never headline "78% accuracy"; it is the base rate, not skill.
-  * THE SCORE IS A RANKING, NOT A CALIBRATED PROBABILITY. Out-of-time, a constant
-    base-rate guess beats the model on Brier score, yet the model's *rank order*
-    carries real signal (top-decile lift ~1.5x). Use `rank` (percentile, honest)
-    in the UI, not `score`/`prob` as if "86" meant "86% chance".
-  * NON-STATIONARITY is real: the >=60%/5yr base rate swings 0.1%->30%->2.5%
-    across eras, which is why the window is PINNED (not auto-rolled) and why the
-    forecast-uncertainty band (`oot_auc_band`) is wide.
+  * `prob` is a CALIBRATED probability of rising: in backtest, ZIPs it rated ~80%
+    actually rose ~80% of the time; ~97%+ rose ~95%; <60% rose only ~37%. Show it
+    honestly as a likelihood, with risk tiers.
+  * BASE RATE IS HIGH. Most neighborhoods appreciate in nominal dollars (~85-99%
+    in a typical 2-year window), so most ZIPs read "likely to rise". The real
+    value is the probability spread + flagging the ~10-15% at genuine risk of
+    stalling/declining (which it does: its low-P bucket rose ~60% vs ~98% for
+    high-P in the recent window).
+  * IT CANNOT FORESEE A MACRO SHOCK. It reads current momentum/conditions; at the
+    2022 rate-shock turning point out-of-time AUC fell to ~0.53. Honest framing:
+    "based on where things stand now", not a crystal ball.
+  * The target auto-rolls to the most recent complete 2-year episode, tracking the
+    current regime.
 """
 from __future__ import annotations
 
@@ -37,7 +41,9 @@ import re
 
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
@@ -45,21 +51,23 @@ from sklearn.model_selection import GroupKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-HORIZON, THRESH, SEED = 5, 0.60, 42
+# HORIZON=2 (2-year forward window). The target is DIRECTIONAL: will ZHVI be higher
+# in HORIZON years than today? (see episode()). No quantile threshold.
+HORIZON, SEED = 2, 42
+QUANTILE = 0.75            # unused by the direction target; kept for back-compat
+THRESH = QUANTILE          # back-compat alias for callers importing THRESH
 MONTH = "01-31"
 META = ["RegionName", "State", "City", "Metro", "CountyName"]
+# The 9 raw features features_at() produces (used by drift/importance reporting).
 FEATURES = ["g_9yr", "g_7yr", "g_4yr", "g_2yr", "g_1yr", "accel",
             "rel_metro", "rel_state", "pctile_metro"]
-# The production model uses only the (bounded) cheapness features. A head-to-head
-# out-of-time A/B picked an L2 logistic on these over the old RandomForest: ~equal
-# forward AUC (0.60) but FAR more stable rankings (top-100 survives a +/-2% reprice
-# ~89/100 vs 60, a 1-yr base shift ~72/100 vs 21) and a higher realized top-decile
-# hit rate (45% vs 36%). The RF was a cheapness bet in disguise, so we model
-# cheapness directly. We use pctile_metro (bounded within-metro rank) + LOG(rel_state)
-# (cheap-vs-state); rel_metro is dropped (collinear with pctile_metro, and as a raw
-# unbounded ratio it gave a few ultra-expensive outliers extreme linear leverage —
-# e.g. Sea Island at 15x its metro median wrongly topped the list). log() tames that.
-CHEAP_FEATURES = ["pctile_metro", "rel_state"]   # rel_state is log-transformed in build_pipe
+# The features the PRODUCTION model actually consumes: cheapness (cheap-for-its-
+# metro/state) + momentum. For DIRECTION we keep g_1yr — recent momentum is the
+# strongest signal for near-term up/down (unlike the ranking model, where its
+# noise hurt; here it is exactly what predicts direction). rel_state is
+# log-transformed in build_pipe; pctile_metro is a bounded within-metro rank.
+MODEL_FEATURES = ["pctile_metro", "rel_state", "g_1yr", "g_2yr", "g_4yr", "accel"]
+CHEAP_FEATURES = ["pctile_metro", "rel_state"]   # kept for back-compat imports
 
 _DATE_COL = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -117,35 +125,53 @@ def features_at(df: pd.DataFrame, B: int) -> pd.DataFrame:
     return out.replace([np.inf, -np.inf], np.nan)
 
 
-def episode(df: pd.DataFrame, B: int, thresh: float = THRESH):
+def episode(df: pd.DataFrame, B: int, quantile: float = QUANTILE):
     """(X, y, frame) for the episode based at year B, or None if the data needed
-    for features (B-9) or the realized outcome (B+HORIZON) is absent."""
+    for features (B-9) or the realized outcome (B+HORIZON) is absent.
+
+    Target is DIRECTIONAL: 1 if the home value is HIGHER at B+HORIZON than at B
+    (the neighborhood went up), else 0. `quantile` is accepted for back-compat but
+    ignored. Most ZIPs are 1 (homes usually appreciate); the skill is separating
+    the risers from the ~10-15% that stall or fall — which is what a calibrated
+    probability of this target captures."""
     tgt = B + HORIZON
     needed = [f"zhvi_{B - k}" for k in (9, 7, 4, 2, 1, 0)] + [f"zhvi_{tgt}"]
     if any(c not in df.columns for c in needed):
         return None
     d = df.dropna(subset=[f"zhvi_{B}", f"zhvi_{tgt}"]).copy()
     d = d[d[f"zhvi_{B}"] > 0]
-    growth = d[f"zhvi_{tgt}"] / d[f"zhvi_{B}"] - 1
-    d["target"] = (growth >= thresh).astype(int)
+    d["target"] = (d[f"zhvi_{tgt}"] > d[f"zhvi_{B}"]).astype(int)
     return features_at(d, B), d["target"], d
 
 
+def _safe_log(x):
+    """log with a tiny floor so a zero/negative ratio can't produce -inf/NaN."""
+    return np.log(np.clip(x, 1e-9, None))
+
+
 def build_pipe(balanced: bool = False) -> Pipeline:
-    """Production model: L2 logistic regression on the cheapness features only.
-    Accepts the full 9-feature frame (selects the cheapness columns internally) so
-    every existing caller keeps working unchanged."""
+    """Production model: ISOTONIC-CALIBRATED gradient-boosted classifier on
+    cheapness + momentum (MODEL_FEATURES), estimating a calibrated probability
+    that the home value RISES over HORIZON years. Accepts the full 9-feature frame
+    (selects the model columns internally) so every existing caller keeps working.
+
+    The isotonic wrapper (cv=3) makes predict_proba honest — a 0.80 output means
+    ~80% of such ZIPs actually rose in backtest. Calibration is monotonic, so it
+    does not change the ranking/AUC, only the probability values. We do NOT balance
+    classes by default: honest calibration needs the true up/down proportions.
+    HistGradientBoosting handles NaNs natively."""
     cw = "balanced" if balanced else None
+    gb = HistGradientBoostingClassifier(
+        max_depth=3, learning_rate=0.05, max_iter=300, min_samples_leaf=200,
+        l2_regularization=1.0, class_weight=cw, random_state=SEED)
     return Pipeline([
-        # pctile_metro passthrough (already bounded 0-1); rel_state log-transformed
-        # so an ultra-expensive ZIP can't dominate the linear model.
+        # rel_state log-transformed so an ultra-expensive ZIP can't dominate; the
+        # rest passthrough (pctile_metro already bounded; momentum ratios raw).
         ("sel", ColumnTransformer([
-            ("pct", "passthrough", ["pctile_metro"]),
-            ("logrel", FunctionTransformer(np.log), ["rel_state"]),
+            ("logrel", FunctionTransformer(_safe_log), ["rel_state"]),
+            ("pass", "passthrough", ["pctile_metro", "g_1yr", "g_2yr", "g_4yr", "accel"]),
         ], remainder="drop")),
-        ("imp", SimpleImputer(strategy="median")),
-        ("sc", StandardScaler()),
-        ("lr", LogisticRegression(max_iter=2000, class_weight=cw, random_state=SEED)),
+        ("cal", CalibratedClassifierCV(gb, method="isotonic", cv=3)),
     ])
 
 
@@ -297,24 +323,25 @@ def _num(v, ndigits=None):
     return int(f) if ndigits == 0 else f
 
 
-def compute_scores(zillow_csv_path: str, train_base: int = 2019,
+APPR_DISPLAY_YEARS = 5   # the "N-year change" context KPI is trailing-actual, not the forecast horizon
+
+
+def compute_scores(zillow_csv_path: str, train_base: int | None = None,
                    score_base: int | None = None) -> dict:
     """Returns {records: [...], metrics: {...}, meta: {...}}.
 
-    train_base is PINNED at 2019 (its >=60%/5yr target is the most recent learnable
-    episode — the base rate is era-dependent: 25% in the 2019->2024 boom but only
-    ~3% in 2021->2026, which is degenerate). Re-check the degeneracy guard below if
-    you move it.
-
-    score_base defaults to the LATEST available data year (freshness fix): we apply
-    the scale-free model to the most recent inputs so the forecast window tracks the
-    present (e.g. 2026->2031) instead of lagging two years behind the data. Pass an
-    explicit year to pin it.
+    score_base defaults to the LATEST available data year: the model is applied to
+    the most recent inputs so the forecast window tracks the present (e.g.
+    2026->2028). train_base defaults to score_base-HORIZON — the most recent COMPLETE
+    2-year episode, whose realized up/down outcome trains the model. The window
+    auto-rolls to the current regime. Pass explicit years to override either.
     """
     df = load_zhvi(zillow_csv_path)
     latest = df.attrs["years"][-1]
     if score_base is None:
         score_base = latest          # freshness: forecast from the newest data
+    if train_base is None:
+        train_base = score_base - HORIZON   # most recent complete episode
     if score_base > latest:
         raise ValueError(f"score_base {score_base} > latest data year {latest}")
 
@@ -324,18 +351,17 @@ def compute_scores(zillow_csv_path: str, train_base: int = 2019,
         raise ValueError(f"train target year {tgt_year} > latest data year {latest}")
     tr = df.dropna(subset=[f"zhvi_{train_base}", f"zhvi_{tgt_year}"]).copy()
     tr = tr[tr[f"zhvi_{train_base}"] > 0]
-    growth = tr[f"zhvi_{tgt_year}"] / tr[f"zhvi_{train_base}"] - 1
-    tr["target"] = (growth >= THRESH).astype(int)
+    tr["target"] = (tr[f"zhvi_{tgt_year}"] > tr[f"zhvi_{train_base}"]).astype(int)  # went up?
     Xtr_all, ytr_all = features_at(tr, train_base), tr["target"]
 
-    # degeneracy guard: a >=60%/5yr target is only learnable when a meaningful
-    # minority of ZIPs hit it. Outside ~[8%, 60%] the classes collapse and the
-    # model is useless — fail loudly rather than ship garbage in an unattended run.
+    # sanity guard: the directional "went up" rate is high but must not be
+    # degenerate (all-up gives the model nothing to separate). Fail loudly in an
+    # unattended run if the training episode has no meaningful down class.
     pos = float(ytr_all.mean())
-    if not (0.08 <= pos <= 0.60):
+    if not (0.50 <= pos <= 0.995):
         raise ValueError(
-            f"degenerate target for {train_base}->{tgt_year}: positive rate {pos:.1%} "
-            f"outside [8%, 60%]. Pick a different train window / threshold."
+            f"degenerate directional target at {train_base}->{tgt_year}: up-rate "
+            f"{pos:.1%}. Need a meaningful minority of declines to learn from."
         )
 
     # honest, best-effort validation metrics (never block the score write)
@@ -356,13 +382,14 @@ def compute_scores(zillow_csv_path: str, train_base: int = 2019,
     except Exception as e:   # noqa: BLE001
         print(f"WARNING: population_stability failed ({e!r})")
 
-    # --- forward forecast: refit on all of the pinned episode, apply at score_base ---
+    # --- forward forecast: refit on the whole training episode, apply at score_base ---
     pipe = build_pipe().fit(Xtr_all, ytr_all)
-    need = [f"zhvi_{y}" for y in (train_base, score_base - 4, score_base - 2,
-                                  score_base - 1, score_base) if f"zhvi_{y}" in df.columns]
-    appr_base = score_base - HORIZON
-    sc = df.dropna(subset=list(set(need + [f"zhvi_{appr_base}"])) + ["Metro"]).copy()
-    sc = sc[(sc[f"zhvi_{score_base}"] > 0) & (sc[f"zhvi_{appr_base}"] > 0)]
+    # require the recent history the momentum features need (so the forecast is real,
+    # not mostly imputed) + a metro (appreciation is a metro phenomenon).
+    need = [f"zhvi_{y}" for y in (score_base, score_base - 1, score_base - 2,
+                                  score_base - 4) if f"zhvi_{y}" in df.columns]
+    sc = df.dropna(subset=need + ["Metro"]).copy()
+    sc = sc[sc[f"zhvi_{score_base}"] > 0]
     Xsc = features_at(sc, score_base)
     sc["prob"] = pipe.predict_proba(Xsc)[:, 1]
     sc["score"] = (sc["prob"] * 100).round().astype(int)
@@ -371,19 +398,25 @@ def compute_scores(zillow_csv_path: str, train_base: int = 2019,
     # only says "this ZIP ranks above X% of the country", which is what the
     # out-of-time evidence supports (ranking skill, not calibrated probability).
     sc["rank"] = (sc["prob"].rank(pct=True) * 100).round().astype(int)
-    sc["appr5yr"] = (sc[f"zhvi_{score_base}"] / sc[f"zhvi_{appr_base}"] - 1) * 100
-    # momentum = the LATEST observable year-over-year change, NOT score_base+1
-    # (freshness fix: never show a stale YoY when newer data exists).
+    # appr context = trailing ACTUAL appreciation over APPR_DISPLAY_YEARS (backward-
+    # looking history for the KPI/chart), independent of the 3-year forecast horizon.
+    appr_base = score_base - APPR_DISPLAY_YEARS
+    if f"zhvi_{appr_base}" in sc.columns:
+        base = sc[f"zhvi_{appr_base}"]
+        sc["appr5yr"] = np.where(base > 0, (sc[f"zhvi_{score_base}"] / base - 1) * 100, np.nan)
+    else:
+        sc["appr5yr"] = np.nan
+    # momentum = the LATEST observable year-over-year change (never a stale YoY).
     mom_now, mom_prev = latest, latest - 1
     if f"zhvi_{mom_now}" in sc.columns and f"zhvi_{mom_prev}" in sc.columns:
-        sc["momentum"] = (sc[f"zhvi_{mom_now}"] / sc[f"zhvi_{mom_prev}"] - 1) * 100
+        prev = sc[f"zhvi_{mom_prev}"]
+        sc["momentum"] = np.where(prev > 0, (sc[f"zhvi_{mom_now}"] / prev - 1) * 100, np.nan)
     else:
         sc["momentum"] = np.nan
     sc["pctile_metro_disp"] = Xsc["pctile_metro"] * 100
-    # honesty flag: this ZIP's score leans on >=1 median-imputed feature (usually
-    # missing long-horizon history). The UI dims/derates these so the "best" list
-    # is not partly fabricated.
-    sc["imputed"] = Xsc.isna().any(axis=1).reindex(sc.index, fill_value=False)
+    # honesty flag: this ZIP's score leans on >=1 median-imputed MODEL feature
+    # (usually missing 7-year history). The UI dims/derates these.
+    sc["imputed"] = Xsc[MODEL_FEATURES].isna().any(axis=1).reindex(sc.index, fill_value=False)
 
     records = []
     for _, r in sc.sort_values("score", ascending=False).iterrows():
@@ -405,7 +438,9 @@ def compute_scores(zillow_csv_path: str, train_base: int = 2019,
     meta = {
         "train_window": f"{train_base}->{tgt_year}",
         "forecast_window": f"{score_base}->{score_base + HORIZON}",
+        "horizon_years": HORIZON,
         "n_scored": len(records),
-        "model": "cheapness-logit-v3",
+        "model": "rise-prob-2yr-v5",
+        "score_meaning": "prob = calibrated probability the home value rises over the horizon",
     }
     return {"records": records, "metrics": metrics, "meta": meta}

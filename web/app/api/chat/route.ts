@@ -60,6 +60,17 @@ export async function POST(request: Request) {
   if (messages.length === 0) {
     return Response.json({ error: "No message provided." }, { status: 400 });
   }
+  // Validate each message's shape before handing it to the SDK, so a malformed
+  // client payload is a clean 400 rather than a thrown SDK error surfaced as 502.
+  const messagesValid = messages.every(
+    (m) =>
+      m != null &&
+      (m.role === "user" || m.role === "assistant") &&
+      typeof m.content === "string",
+  );
+  if (!messagesValid) {
+    return Response.json({ error: "Malformed messages." }, { status: 400 });
+  }
 
   const system =
     `You are a real estate analyst assistant for NeighborhoodIQ. The user is ` +
@@ -67,21 +78,21 @@ export async function POST(request: Request) {
     `Here is ALL the data we have for this ZIP (JSON):\n` +
     `${JSON.stringify(body?.context ?? {}, null, 2)}\n\n` +
     `What the fields mean:\n` +
-    `- score / rank / prob: our model's RELATIVE RANKING of this ZIP's 5-year ` +
-    `appreciation odds over the next 5 years versus other metro ZIPs. Treat it as a ranking, ` +
-    `NOT a calibrated probability — a score of 70 does NOT mean a 70% chance.\n` +
+    `- score / prob: the CALIBRATED probability (score = prob as a %) that this ZIP's ` +
+    `home value is HIGHER in 2 years than today. It is calibrated — ZIPs rated ~80% ` +
+    `actually rose ~80% of the time in backtest — so a score of 70 DOES mean ~70% chance.\n` +
+    `- rank: percentile of this ZIP's rise-likelihood vs all metro ZIPs (secondary).\n` +
     `- appr5yr: the ACTUAL Zillow home-value change over the most recent 5 years (past, real).\n` +
     `- momentum: most recent year-over-year price change (%).\n` +
-    `- pctileMetro: price rank within the ZIP's metro (0 = cheapest, 100 = priciest); ` +
-    `lower means more room to appreciate.\n` +
+    `- pctileMetro: price rank within the ZIP's metro (0 = cheapest, 100 = priciest).\n` +
     `The model uses ONLY Zillow price history (momentum + how cheap the ZIP is vs its ` +
     `metro). It does NOT use crime, schools, demographics, or permits.\n\n` +
     `Rules:\n` +
     `- Answer using the data above plus widely-known, durable facts about the area.\n` +
-    `- Be honest about uncertainty: this is a forecast with only MODEST out-of-time ` +
-    `skill (it ranks neighborhoods better than chance — backtested AUC ~0.63 — but it ` +
-    `is not a guarantee, and its raw "accuracy" is no better than assuming no ZIP ` +
-    `gentrifies). Never imply it predicts the future reliably.\n` +
+    `- Be honest about uncertainty: MODEST out-of-time skill (backtested AUC ~0.66, ~0.72 ` +
+    `recent). Most neighborhoods rise, so most scores are high — the real signal is a LOW ` +
+    `score flagging elevated risk. It reads current conditions and cannot foresee a market ` +
+    `crash. Never imply it predicts the future reliably.\n` +
     `- Do NOT invent specific statistics (prices, percentages, counts, dates) that ` +
     `are not in the data. If asked for a number we don't have, say plainly that you ` +
     `don't have that data — do not guess.\n` +

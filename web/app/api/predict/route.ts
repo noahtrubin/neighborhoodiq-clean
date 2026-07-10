@@ -7,7 +7,7 @@
 // (Today it reads precomputed scores; later this same endpoint can front a live
 // Python model on Cloud Run without the client changing.)
 
-import { getManyZips, getMetroPeers, getZip } from "../../lib/scores";
+import { getManyZips, getMetroPeers, getSeries, getZip } from "../../lib/scores";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -34,5 +34,9 @@ export async function GET(request: Request) {
       { status: 404 },
     );
   }
-  return Response.json({ data, metroPeers: await getMetroPeers(zip) });
+  return Response.json({
+    data,
+    metroPeers: await getMetroPeers(zip),
+    series: getSeries(zip, data.metro),
+  });
 }

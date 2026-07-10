@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "train_window": "2024->2026",
+    "forecast_window": "2026->2028",
+    "horizon_years": 2,
+    "n_scored": 20892,
+    "model": "rise-prob-2yr-v5",
+    "score_meaning": "prob = calibrated probability the home value rises over the horizon"
+  },
+  "metrics": {
+    "train_n": 26271,
+    "positive_rate": 0.793,
+    "in_sample_auc_optimistic": 0.816,
+    "in_sample_accuracy_optimistic": 0.821,
+    "baseline_accuracy": 0.793,
+    "oot_train_window": "2022->2024",
+    "oot_auc": 0.674,
+    "oot_auc_ci_sampling": [
+      0.666,
+      0.681
+    ],
+    "oot_brier": 0.1723,
+    "oot_brier_constant_baseline": 0.1642,
+    "oot_auc_band": [
+      0.491,
+      0.84
+    ],
+    "oot_auc_episodes": 14,
+    "metro_grouped_auc": 0.804,
+    "top_features": [],
+    "drift": {
+      "psi": {
+        "g_9yr": 0.133,
+        "g_7yr": 0.184,
+        "g_4yr": 3.177,
+        "g_2yr": 0.485,
+        "g_1yr": 0.279,
+        "accel": 0.943,
+        "rel_metro": 0.001,
+        "rel_state": 0.001,
+        "pctile_metro": 0.0
+      },
+      "severe_features": [
+        "g_4yr",
+        "accel",
+        "g_2yr",
+        "g_1yr"
+      ],
+      "n_severe": 4
+    }
+  }
+}

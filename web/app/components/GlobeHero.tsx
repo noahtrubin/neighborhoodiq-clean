@@ -527,16 +527,16 @@ export default function GlobeHero() {
         >
           <span className="globe-eyebrow">
             <span className="globe-eyebrow-dot" />
-            20,306 ZIP codes scored
+            20,892 ZIP codes, one dashboard
           </span>
           <h1 className="globe-title">
             The whole country,
             <br />
-            <span className="globe-title-em">scored ZIP by ZIP.</span>
+            <span className="globe-title-em">neighborhood by neighborhood.</span>
           </h1>
           <p className="globe-lede">
-            A model trained on a decade of home values, forecasting five-year
-            appreciation for every metro ZIP code in America.
+            Real Zillow home-value trends for every metro ZIP in America — what
+            homes cost, where prices are heading, and how each place compares.
           </p>
           <div className="globe-scrollcue">
             <span>Scroll to zoom in</span>
@@ -558,7 +558,7 @@ export default function GlobeHero() {
           <div className="globe-mapcopy">
             <h2 className="globe-maptitle">Every ZIP, one score.</h2>
             <p className="globe-mapsub">
-              Brighter is stronger five-year appreciation signal. Hover any point
+              Brighter means a higher 2-year chance of rising. Hover any point
               to inspect it.
             </p>
             <a href="/login" className="globe-mapcta">
