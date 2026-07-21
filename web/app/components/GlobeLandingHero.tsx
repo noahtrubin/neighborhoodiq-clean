@@ -1851,25 +1851,6 @@ export default function GlobeLandingHero() {
           )}
         </div>
       </section>
-
-      <footer className="lgh-footer">
-        <div className="lgh-footer-inner">
-          <span className="lgh-footer-brand">NeighborhoodIQ</span>
-          <div className="lgh-footer-links">
-            <a
-              className="lgh-footer-link"
-              href="https://www.linkedin.com/in/noah-rubin-/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              LinkedIn
-            </a>
-            <a className="lgh-footer-link" href="mailto:noahtalmirubin@gmail.com">
-              noahtalmirubin@gmail.com
-            </a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }
@@ -2111,27 +2092,4 @@ const LGH_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .lgh-scrollcue-dot, .lgh-spinner { animation: none; }
 }
-
-/* Footer — sits below the globe scene once you scroll past it */
-.lgh-footer {
-  position: relative; z-index: 5;
-  background: #05070f;
-  border-top: 1px solid rgba(241,244,238,0.1);
-  padding: 28px clamp(20px, 5vw, 48px);
-}
-.lgh-footer-inner {
-  max-width: 1100px; margin: 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; flex-wrap: wrap;
-}
-.lgh-footer-brand {
-  font-family: var(--font-sans-stack); font-weight: 600; font-size: 14px;
-  color: rgba(241,244,238,0.72); letter-spacing: -0.01em;
-}
-.lgh-footer-links { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
-.lgh-footer-link {
-  font-size: 14px; color: rgba(241,244,238,0.66); text-decoration: none;
-  transition: color 0.15s ease;
-}
-.lgh-footer-link:hover { color: var(--lgh-mist); }
 `;
