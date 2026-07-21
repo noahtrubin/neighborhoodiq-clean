@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./lib/AuthProvider";
+import Footer from "./components/Footer";
 
 // One typeface across the whole app: Plus Jakarta Sans for headings, body, and
 // data labels alike (see globals.css — the display/mono stacks alias this).
@@ -35,7 +36,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={sans.variable}>
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <Footer />
+        </AuthProvider>
       </body>
     </html>
   );
