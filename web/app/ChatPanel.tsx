@@ -97,8 +97,7 @@ export default function ChatPanel({
         )}
       </div>
       <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginBottom: 14 }}>
-        Answers are grounded in the data we have for {zip} ({city}); it will say
-        when it doesn&apos;t have something rather than guess.
+        Answers use only the data shown for {zip}.
       </div>
 
       {messages.length > 0 && (

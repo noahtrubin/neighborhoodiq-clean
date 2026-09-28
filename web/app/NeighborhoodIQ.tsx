@@ -93,7 +93,7 @@ function SignalBar({
     return () => clearTimeout(t);
   }, [value, delay]);
   return (
-    <div style={{ marginBottom: 24 }}>
+    <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 9 }}>
         <span style={{ fontSize: 14, color: "var(--ink-soft)", fontWeight: 500, display: "flex", alignItems: "center", gap: 9 }}>
           <Icon name={icon} size={15} style={{ color: barColor }} />
@@ -163,24 +163,6 @@ function KpiBand({ data, series, col }: { data: ZipData; series: SeriesBundle | 
           <div className="niq-kpi-sub">{t.sub}</div>
         </div>
       ))}
-    </div>
-  );
-}
-
-// Secondary context: where this ZIP's rise-likelihood sits in the national spread.
-function PercentileStrip({ rank, color }: { rank: number; color: SignalColor }) {
-  return (
-    <div className="niq-pctile">
-      <div className="niq-pctile-cap">
-        More likely to rise than <b style={{ color: color.text }}>{Math.min(99, rank)}%</b> of U.S. metro ZIPs
-      </div>
-      <div className="niq-pctile-track">
-        <span className="niq-pctile-marker" style={{ left: `${rank}%`, background: color.stroke }} />
-      </div>
-      <div className="niq-pctile-ends">
-        <span>most at risk</span>
-        <span>most likely to rise</span>
-      </div>
     </div>
   );
 }
@@ -334,16 +316,8 @@ export default function NeighborhoodIQ() {
         {/* Top command area: centered hero + search */}
         <div className="niq-toolbar">
           <div className="niq-hero">
-            <span className="niq-eyebrow">
-              <span className="niq-eyebrow-dot" />
-              The honest neighborhood dashboard
-            </span>
             <h1>Search any U.S. neighborhood.</h1>
-            <p>
-              Enter a ZIP code to see what homes cost, whether prices are rising
-              or cooling, and how it compares to its metro — plus an honest read
-              on the risk. Real Zillow data, no hype.
-            </p>
+            <p>Home prices, trends, and risk for any U.S. ZIP code.</p>
           </div>
 
           <div className="niq-search">
@@ -404,7 +378,7 @@ export default function NeighborhoodIQ() {
                 <div className="niq-chart-head">
                   <div>
                     <div className="niq-chart-title">Home-value history</div>
-                    <div className="niq-chart-sub">Zillow Home Value Index · {result.city} vs. its metro &amp; the U.S.</div>
+                    <div className="niq-chart-sub">Zillow Home Value Index</div>
                   </div>
                   <div className="niq-chart-legend">
                     <span className="niq-leg"><i style={{ background: col.stroke }} /> {currentZip}</span>
@@ -437,7 +411,6 @@ export default function NeighborhoodIQ() {
                   <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em" }}>{result.city}, {result.state}</div>
                   <div style={{ fontSize: 13.5, color: "var(--ink-muted)", marginTop: 2 }}>{result.metro || result.county} · {currentZip}</div>
                 </div>
-                {result.rank != null && <PercentileStrip rank={result.rank} color={col} />}
                 {result.imputed && (
                   <div style={{ fontSize: 11, color: "var(--ink-faint)", fontStyle: "italic", textAlign: "center", maxWidth: 240 }}>
                     Limited price history here, so this estimate is partly modeled — treat it with extra caution.
@@ -449,7 +422,7 @@ export default function NeighborhoodIQ() {
               {/* Why this score — the model's inputs (paragraph trimmed away) */}
               <div className="niq-card niq-signals-card">
                 <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 5 }}>Why this score</div>
-                <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 24 }}>What's driving the 2-year rise estimate</div>
+                <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 18 }}>What's driving the 2-year rise estimate</div>
                 {headroom != null && (
                   <SignalBar label="Affordability headroom" icon="wallet" value={headroom} display={`${headroom}/100`} barColor="var(--moderate)" description="Cheaper-than-its-metro ZIPs have the most room to rise, a major driver of the model's top picks" delay={100} />
                 )}
@@ -459,10 +432,6 @@ export default function NeighborhoodIQ() {
                 {series?.yoy != null && (
                   <SignalBar label="Recent momentum" icon="zap" value={normMomentum(series.yoy)} display={fmtPct(series.yoy)} barColor="var(--blue)" description="Year-over-year change, trailing 12 months" delay={300} />
                 )}
-                <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 12, paddingTop: 14, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 6 }}>
-                  <Icon name="check" size={13} style={{ color: "var(--accent-ink)" }} />
-                  A calibrated chance of rising, not a guarantee · out-of-time backtest AUC ≈ 0.66
-                </div>
               </div>
 
               {/* Metro comparison rail */}
