@@ -327,53 +327,31 @@ a {
 /* The top command area — centered, with room to breathe. */
 .niq-toolbar {
   max-width: 660px;
-  margin: 24px auto 56px;
+  margin: 12px auto 40px;
   text-align: center;
 }
 .niq-hero {
-  margin: 0 0 30px;
-}
-.niq-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
-  border-radius: 999px;
-  padding: 6px 14px 6px 12px;
-  margin-bottom: 24px;
-}
-.niq-eyebrow-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--accent-ink);
+  margin: 0 0 22px;
 }
 .niq-hero h1 {
-  font-size: clamp(36px, 5vw, 54px);
-  line-height: 1.03;
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1.05;
   font-weight: 600;
   letter-spacing: -0.03em;
-  margin: 0 auto 18px;
-  max-width: 15ch;
+  margin: 0 auto;
+  max-width: 100%;
+  text-wrap: balance;
+}
+.niq-hero p {
+  font-size: 15.5px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  margin: 12px auto 0;
+  max-width: 100%;
   text-wrap: balance;
 }
 .niq-hero h1 .grad {
   color: var(--accent-ink);
-}
-.niq-hero p {
-  font-size: 17px;
-  line-height: 1.65;
-  color: var(--ink-soft);
-  margin: 0 auto;
-  max-width: 44ch;
-  text-wrap: pretty;
 }
 .niq-chips {
   display: flex;
@@ -790,53 +768,6 @@ a {
   .niq-kpiband {
     grid-template-columns: 1fr;
   }
-}
-
-/* ---- Percentile strip: shows the ranking as a ranking ---- */
-.niq-pctile {
-  width: 100%;
-  max-width: 256px;
-}
-.niq-pctile-cap {
-  font-size: 12px;
-  color: var(--ink-muted);
-  text-align: center;
-  margin-bottom: 10px;
-}
-.niq-pctile-cap b {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.niq-pctile-track {
-  position: relative;
-  height: 7px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--weak-bg),
-    color-mix(in srgb, var(--moderate) 42%, transparent),
-    color-mix(in srgb, var(--strong) 62%, transparent)
-  );
-}
-.niq-pctile-marker {
-  position: absolute;
-  top: 50%;
-  width: 13px;
-  height: 13px;
-  border-radius: 999px;
-  transform: translate(-50%, -50%);
-  border: 2.5px solid var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-.niq-pctile-ends {
-  display: flex;
-  justify-content: space-between;
-  font-family: var(--mono);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-faint);
-  margin-top: 8px;
 }
 
 /* ---- Home-value history chart ---- */
