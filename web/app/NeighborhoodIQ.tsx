@@ -376,35 +376,19 @@ export default function NeighborhoodIQ() {
           </div>
         )}
 
-        {/* Empty state: quiet — quick jumps + your recent ZIPs */}
+        {/* Empty state: one quiet line — your last few ZIPs, or examples if none */}
         {!result && !loading && !error && (
           <div className="niq-empty">
-            <div className="niq-empty-block">
-              <div className="niq-empty-label">Try a ZIP</div>
-              <div className="niq-empty-chips">
-                {["78702", "60647", "66607", "08104"].map((z) => (
-                  <button key={z} className="niq-example-chip" onClick={() => show(z)}>
-                    <Icon name="search" size={13} />
-                    {z}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {recent.length > 0 && (
-              <div className="niq-empty-block">
-                <div className="niq-empty-label">Recently viewed</div>
-                <div className="niq-recent-chips">
-                  {recent.map((r) => (
-                    <button key={r.zip} className="niq-recent-chip" onClick={() => show(r.zip)}>
-                      <b>{r.zip}</b>
-                      {r.city ? `${r.city}, ${r.state}` : r.state}
-                      <span className="niq-recent-rank">{r.score}%</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            <span className="niq-empty-label">{recent.length > 0 ? "Recent" : "Try"}</span>
+            {(recent.length > 0
+              ? recent.slice(0, 4).map((r) => ({ zip: r.zip, sub: r.city ? `${r.city}, ${r.state}` : r.state }))
+              : ["78702", "60647", "66607", "08104"].map((zip) => ({ zip, sub: null }))
+            ).map((c) => (
+              <button key={c.zip} className="niq-chip" onClick={() => show(c.zip)}>
+                <b>{c.zip}</b>
+                {c.sub && <span>{c.sub}</span>}
+              </button>
+            ))}
           </div>
         )}
 
