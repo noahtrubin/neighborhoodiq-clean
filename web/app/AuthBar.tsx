@@ -57,13 +57,13 @@ export default function UserMenu() {
             <div className="nm-email">{user.email}</div>
           </div>
           <Link
-            href="/#favorites"
+            href="/dashboard#saved"
             className="niq-menu-item"
             role="menuitem"
             onClick={() => setOpen(false)}
           >
             <Icon name="star" size={16} />
-            Your favorites
+            Saved
           </Link>
           <button
             className="niq-menu-item"

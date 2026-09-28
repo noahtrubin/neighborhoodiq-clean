@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "./lib/AuthProvider";
-import Icon from "./components/Icon";
 import type { ZipData } from "./lib/types";
 
 export default function FavoritesList({ onSelect }: { onSelect: (z: string) => void }) {
@@ -26,10 +25,6 @@ export default function FavoritesList({ onSelect }: { onSelect: (z: string) => v
 
   return (
     <div>
-      <div className="niq-city-label" style={{ marginTop: 0 }}>
-        <Icon name="star-filled" size={13} style={{ color: "var(--accent-ink)" }} />
-        Your favorites
-      </div>
       <div className="niq-dir-grid">
         {data.map((d) => (
           <div key={d.zip} className="niq-zip-card" onClick={() => onSelect(d.zip)}>
