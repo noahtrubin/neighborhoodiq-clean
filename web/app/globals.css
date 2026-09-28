@@ -669,7 +669,7 @@ a {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 .niq-dash-top.has-rail {
   grid-template-columns: 320px minmax(0, 1fr) 300px;
@@ -681,7 +681,10 @@ a {
 
 /* Metro comparison rail */
 .niq-peers-card {
-  padding: 24px 22px;
+  padding: 30px 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .niq-peers-title {
   display: flex;
@@ -815,7 +818,7 @@ a {
   background: repeating-linear-gradient(90deg, var(--ink-muted) 0 4px, transparent 4px 7px) !important;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 960px) {
   /* Comparison rail can't stay a skinny third column — send it full-width
      below the score/signals row and lay its cards out horizontally. */
   .niq-dash-top.has-rail {
@@ -836,10 +839,11 @@ a {
 }
 
 .niq-score-card {
-  padding: 34px 24px;
+  padding: 30px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 16px;
 }
 .niq-badge {
@@ -851,6 +855,9 @@ a {
 }
 .niq-signals-card {
   padding: 30px 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* ---- Section heading ---- */
