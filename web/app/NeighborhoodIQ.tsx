@@ -132,32 +132,6 @@ function pushRecent(zip: string, d: ZipData): RecentZip[] {
   return next;
 }
 
-// Plain-language model explainer, surfaced as a visible popover so the trust +
-// coverage story isn't buried in fine print.
-function ModelInfo() {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="niq-modelinfo">
-      <button className="niq-info-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="niq-info-i" aria-hidden>i</span>
-        How the score works
-      </button>
-      {open && (
-        <>
-          <div className="niq-info-backdrop" onClick={() => setOpen(false)} />
-          <div className="niq-info-pop" role="dialog" aria-label="How the score works">
-            <h4>How the score works</h4>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>What it is.</b> The <b>calibrated chance</b> this ZIP's home value is higher in 2 years than today. When we say 80%, about 80% of such ZIPs actually rose in backtest.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>The data.</b> 20+ years of real Zillow ZIP-level home values: price momentum (how fast it's rising) and affordability versus the local metro. Nothing else.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>Read it right.</b> Most neighborhoods rise, so most read high — the signal is the number and the <b>Elevated&nbsp;risk</b> flag on the ~10–15% likelier to stall or fall.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>How good is it?</b> Out-of-time backtest AUC ≈ 0.66 (≈0.72 recent). It reads today's conditions — it can't foresee a rate shock or crash. A guide, not a guarantee.</div></div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 // The "numbers that matter" band — actual dollars, not abstractions.
 // The 5-year change, derived from the SAME annual series the chart plots so every
 // number on the page is mutually consistent (the model's own appr5yr uses Jan
@@ -391,13 +365,6 @@ export default function NeighborhoodIQ() {
                 <Icon name="arrow-right" size={14} />
               </span>
             </button>
-          </div>
-
-          <div className="niq-trust">
-            <ModelInfo />
-            <div className="niq-subnote">
-              Updated monthly · Zillow price history · Not a guarantee
-            </div>
           </div>
         </div>
 

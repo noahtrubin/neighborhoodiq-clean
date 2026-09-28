@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useAuth } from "../lib/AuthProvider";
 import UserMenu from "../AuthBar";
 import Logo from "./Logo";
+import ModelInfo from "./ModelInfo";
 
 export default function Header() {
   const { user, loading } = useAuth();
@@ -25,6 +26,7 @@ export default function Header() {
         <div className="niq-header-spacer" />
 
         <div className="niq-header-actions">
+          <ModelInfo align="right" />
           {!loading &&
             (user ? (
               <UserMenu />
