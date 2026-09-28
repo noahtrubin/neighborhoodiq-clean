@@ -131,10 +131,19 @@ a {
 }
 
 /* ---- Shell ---- */
+/* The dashboard has no full-height root of its own (the other pages do), so on
+   a short page — the empty state — let the shell grow and keep the site footer
+   at the bottom of the viewport instead of floating mid-page. */
+body:has(> .niq-shell) {
+  display: flex;
+  flex-direction: column;
+}
 .niq-shell {
+  width: 100%;
   max-width: var(--shell);
   margin: 0 auto;
   padding: 52px 24px 120px;
+  flex: 1 0 auto;
 }
 @media (max-width: 600px) {
   .niq-shell {
