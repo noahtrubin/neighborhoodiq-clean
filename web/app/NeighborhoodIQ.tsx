@@ -15,8 +15,7 @@ import Header from "./components/Header";
 import Icon, { type IconName } from "./components/Icon";
 import FavoriteButton from "./FavoriteButton";
 import ChatPanel from "./ChatPanel";
-import FavoritesList from "./FavoritesList";
-import SavedChats from "./SavedChats";
+import SavedSection from "./SavedSection";
 import type { SeriesBundle, ZipData } from "./lib/types";
 
 type SignalColor = { stroke: string; text: string; bg: string; label: string };
@@ -94,7 +93,7 @@ function SignalBar({
     return () => clearTimeout(t);
   }, [value, delay]);
   return (
-    <div style={{ marginBottom: 24 }}>
+    <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 9 }}>
         <span style={{ fontSize: 14, color: "var(--ink-soft)", fontWeight: 500, display: "flex", alignItems: "center", gap: 9 }}>
           <Icon name={icon} size={15} style={{ color: barColor }} />
@@ -133,32 +132,6 @@ function pushRecent(zip: string, d: ZipData): RecentZip[] {
   return next;
 }
 
-// Plain-language model explainer, surfaced as a visible popover so the trust +
-// coverage story isn't buried in fine print.
-function ModelInfo() {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="niq-modelinfo">
-      <button className="niq-info-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="niq-info-i" aria-hidden>i</span>
-        How the score works
-      </button>
-      {open && (
-        <>
-          <div className="niq-info-backdrop" onClick={() => setOpen(false)} />
-          <div className="niq-info-pop" role="dialog" aria-label="How the score works">
-            <h4>How the score works</h4>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>What it is.</b> The <b>calibrated chance</b> this ZIP's home value is higher in 2 years than today. When we say 80%, about 80% of such ZIPs actually rose in backtest.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>The data.</b> 20+ years of real Zillow ZIP-level home values: price momentum (how fast it's rising) and affordability versus the local metro. Nothing else.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>Read it right.</b> Most neighborhoods rise, so most read high — the signal is the number and the <b>Elevated&nbsp;risk</b> flag on the ~10–15% likelier to stall or fall.</div></div>
-            <div className="niq-info-row"><span className="niq-info-dot" /><div><b>How good is it?</b> Out-of-time backtest AUC ≈ 0.66 (≈0.72 recent). It reads today's conditions — it can't foresee a rate shock or crash. A guide, not a guarantee.</div></div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 // The "numbers that matter" band — actual dollars, not abstractions.
 // The 5-year change, derived from the SAME annual series the chart plots so every
 // number on the page is mutually consistent (the model's own appr5yr uses Jan
@@ -190,24 +163,6 @@ function KpiBand({ data, series, col }: { data: ZipData; series: SeriesBundle | 
           <div className="niq-kpi-sub">{t.sub}</div>
         </div>
       ))}
-    </div>
-  );
-}
-
-// Secondary context: where this ZIP's rise-likelihood sits in the national spread.
-function PercentileStrip({ rank, color }: { rank: number; color: SignalColor }) {
-  return (
-    <div className="niq-pctile">
-      <div className="niq-pctile-cap">
-        More likely to rise than <b style={{ color: color.text }}>{Math.min(99, rank)}%</b> of U.S. metro ZIPs
-      </div>
-      <div className="niq-pctile-track">
-        <span className="niq-pctile-marker" style={{ left: `${rank}%`, background: color.stroke }} />
-      </div>
-      <div className="niq-pctile-ends">
-        <span>most at risk</span>
-        <span>most likely to rise</span>
-      </div>
     </div>
   );
 }
@@ -361,16 +316,8 @@ export default function NeighborhoodIQ() {
         {/* Top command area: centered hero + search */}
         <div className="niq-toolbar">
           <div className="niq-hero">
-            <span className="niq-eyebrow">
-              <span className="niq-eyebrow-dot" />
-              The honest neighborhood dashboard
-            </span>
             <h1>Search any U.S. neighborhood.</h1>
-            <p>
-              Enter a ZIP code to see what homes cost, whether prices are rising
-              or cooling, and how it compares to its metro — plus an honest read
-              on the risk. Real Zillow data, no hype.
-            </p>
+            <p>Home prices, trends, and risk for any U.S. ZIP code.</p>
           </div>
 
           <div className="niq-search">
@@ -393,13 +340,6 @@ export default function NeighborhoodIQ() {
               </span>
             </button>
           </div>
-
-          <div className="niq-trust">
-            <ModelInfo />
-            <div className="niq-subnote">
-              Updated monthly · Zillow price history · Not a guarantee
-            </div>
-          </div>
         </div>
 
         {loading && <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 10 }}>Loading forecast…</div>}
@@ -410,35 +350,19 @@ export default function NeighborhoodIQ() {
           </div>
         )}
 
-        {/* Empty state: quiet — quick jumps + your recent ZIPs */}
+        {/* Empty state: one quiet line — your last few ZIPs, or examples if none */}
         {!result && !loading && !error && (
           <div className="niq-empty">
-            <div className="niq-empty-block">
-              <div className="niq-empty-label">Try a ZIP</div>
-              <div className="niq-empty-chips">
-                {["78702", "60647", "66607", "08104"].map((z) => (
-                  <button key={z} className="niq-example-chip" onClick={() => show(z)}>
-                    <Icon name="search" size={13} />
-                    {z}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {recent.length > 0 && (
-              <div className="niq-empty-block">
-                <div className="niq-empty-label">Recently viewed</div>
-                <div className="niq-recent-chips">
-                  {recent.map((r) => (
-                    <button key={r.zip} className="niq-recent-chip" onClick={() => show(r.zip)}>
-                      <b>{r.zip}</b>
-                      {r.city ? `${r.city}, ${r.state}` : r.state}
-                      <span className="niq-recent-rank">{r.score}%</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            <span className="niq-empty-label">{recent.length > 0 ? "Recent" : "Try"}</span>
+            {(recent.length > 0
+              ? recent.slice(0, 4).map((r) => ({ zip: r.zip, sub: r.city ? `${r.city}, ${r.state}` : r.state }))
+              : ["78702", "60647", "66607", "08104"].map((zip) => ({ zip, sub: null }))
+            ).map((c) => (
+              <button key={c.zip} className="niq-chip" onClick={() => show(c.zip)}>
+                <b>{c.zip}</b>
+                {c.sub && <span>{c.sub}</span>}
+              </button>
+            ))}
           </div>
         )}
 
@@ -454,7 +378,7 @@ export default function NeighborhoodIQ() {
                 <div className="niq-chart-head">
                   <div>
                     <div className="niq-chart-title">Home-value history</div>
-                    <div className="niq-chart-sub">Zillow Home Value Index · {result.city} vs. its metro &amp; the U.S.</div>
+                    <div className="niq-chart-sub">Zillow Home Value Index</div>
                   </div>
                   <div className="niq-chart-legend">
                     <span className="niq-leg"><i style={{ background: col.stroke }} /> {currentZip}</span>
@@ -487,7 +411,6 @@ export default function NeighborhoodIQ() {
                   <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em" }}>{result.city}, {result.state}</div>
                   <div style={{ fontSize: 13.5, color: "var(--ink-muted)", marginTop: 2 }}>{result.metro || result.county} · {currentZip}</div>
                 </div>
-                {result.rank != null && <PercentileStrip rank={result.rank} color={col} />}
                 {result.imputed && (
                   <div style={{ fontSize: 11, color: "var(--ink-faint)", fontStyle: "italic", textAlign: "center", maxWidth: 240 }}>
                     Limited price history here, so this estimate is partly modeled — treat it with extra caution.
@@ -499,7 +422,7 @@ export default function NeighborhoodIQ() {
               {/* Why this score — the model's inputs (paragraph trimmed away) */}
               <div className="niq-card niq-signals-card">
                 <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 5 }}>Why this score</div>
-                <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 24 }}>What's driving the 2-year rise estimate</div>
+                <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 18 }}>What's driving the 2-year rise estimate</div>
                 {headroom != null && (
                   <SignalBar label="Affordability headroom" icon="wallet" value={headroom} display={`${headroom}/100`} barColor="var(--moderate)" description="Cheaper-than-its-metro ZIPs have the most room to rise, a major driver of the model's top picks" delay={100} />
                 )}
@@ -509,10 +432,6 @@ export default function NeighborhoodIQ() {
                 {series?.yoy != null && (
                   <SignalBar label="Recent momentum" icon="zap" value={normMomentum(series.yoy)} display={fmtPct(series.yoy)} barColor="var(--blue)" description="Year-over-year change, trailing 12 months" delay={300} />
                 )}
-                <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 12, paddingTop: 14, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 6 }}>
-                  <Icon name="check" size={13} style={{ color: "var(--accent-ink)" }} />
-                  A calibrated chance of rising, not a guarantee · out-of-time backtest AUC ≈ 0.66
-                </div>
               </div>
 
               {/* Metro comparison rail */}
@@ -545,11 +464,7 @@ export default function NeighborhoodIQ() {
           </div>
         )}
 
-        <div id="favorites" className="niq-section">
-          <FavoritesList onSelect={(z) => show(z)} />
-        </div>
-
-        <SavedChats />
+        <SavedSection onSelect={(z) => show(z)} />
       </main>
     </>
   );
