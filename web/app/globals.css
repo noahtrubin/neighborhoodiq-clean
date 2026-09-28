@@ -1016,6 +1016,25 @@ a {
   line-height: 1.5;
 }
 
+/* ---- Saved: favorites + chats behind tabs, collapsed by default ---- */
+.niq-saved-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.niq-saved-head .niq-section-title {
+  font-size: 18px;
+  margin: 0;
+}
+.niq-saved-head .niq-tabs {
+  margin: 0;
+}
+.niq-saved-toggle {
+  margin-left: auto;
+}
+
 /* ---- Filter tabs ---- */
 .niq-tabs {
   display: flex;

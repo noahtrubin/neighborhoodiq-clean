@@ -15,8 +15,7 @@ import Header from "./components/Header";
 import Icon, { type IconName } from "./components/Icon";
 import FavoriteButton from "./FavoriteButton";
 import ChatPanel from "./ChatPanel";
-import FavoritesList from "./FavoritesList";
-import SavedChats from "./SavedChats";
+import SavedSection from "./SavedSection";
 import type { SeriesBundle, ZipData } from "./lib/types";
 
 type SignalColor = { stroke: string; text: string; bg: string; label: string };
@@ -545,11 +544,7 @@ export default function NeighborhoodIQ() {
           </div>
         )}
 
-        <div id="favorites" className="niq-section">
-          <FavoritesList onSelect={(z) => show(z)} />
-        </div>
-
-        <SavedChats />
+        <SavedSection onSelect={(z) => show(z)} />
       </main>
     </>
   );
