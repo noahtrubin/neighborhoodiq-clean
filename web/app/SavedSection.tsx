@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAuth } from "./lib/AuthProvider";
 import FavoritesList from "./FavoritesList";
 import SavedChatsList, { useSavedChats } from "./SavedChats";
 
-// One compact "Saved" row at the foot of the dashboard: favorites and saved
+// One compact "Saved" row at the foot of the ZIP analysis panel: favorites and saved
 // chats behind tabs, collapsed by default so they don't compete with results.
 type Tab = "favorites" | "chats";
 
@@ -17,17 +17,6 @@ export default function SavedSection({ onSelect }: { onSelect: (zip: string) => 
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab | null>(null);
 
-  // The user-menu link (/dashboard#saved) should land here expanded, whether
-  // it navigates to the page or just changes the hash on it.
-  useEffect(() => {
-    const sync = () => {
-      if (window.location.hash === "#saved") setOpen(true);
-    };
-    sync();
-    window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
-  }, []);
-
   if (!user || (nFav === 0 && nChats === 0)) return null;
   const active: Tab = tab ?? (nFav > 0 ? "favorites" : "chats");
   const pick = (t: Tab) => {
@@ -36,7 +25,7 @@ export default function SavedSection({ onSelect }: { onSelect: (zip: string) => 
   };
 
   return (
-    <section id="saved" className="niq-section niq-saved">
+    <section className="niq-section niq-saved">
       <div className="niq-saved-head">
         <div className="niq-section-title">Saved</div>
         <div className="niq-tabs">
