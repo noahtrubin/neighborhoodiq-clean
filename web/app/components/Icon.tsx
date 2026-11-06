@@ -25,7 +25,8 @@ export type IconName =
   | "logout"
   | "send"
   | "house"
-  | "alert";
+  | "alert"
+  | "x";
 
 const PATHS: Record<Exclude<IconName, "star-filled" | "google">, string> = {
   search: "M11 11m-7 0a7 7 0 1 0 14 0a7 7 0 1 0-14 0 M21 21l-4.3-4.3",
@@ -52,6 +53,7 @@ const PATHS: Record<Exclude<IconName, "star-filled" | "google">, string> = {
   send: "M22 2L11 13 M22 2l-7 20-4-9-9-4z",
   house: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10",
   alert: "M12 3l9 16H3z M12 10v4 M12 17.5v.5",
+  x: "M6 6l12 12 M18 6L6 18",
 };
 
 export default function Icon({

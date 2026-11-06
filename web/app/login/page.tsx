@@ -7,7 +7,7 @@ import AuthForm from "./AuthForm";
 
 export const metadata: Metadata = {
   title: "Sign in to NeighborhoodIQ",
-  description: "Sign in with Google to open your NeighborhoodIQ dashboard.",
+  description: "Sign in with Google to analyze any ZIP on NeighborhoodIQ.",
 };
 
 export default function LoginPage() {

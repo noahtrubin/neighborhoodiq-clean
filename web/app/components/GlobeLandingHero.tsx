@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 // Plain <a> for the in-hero links (not next/link): this is a client component,
 // and next/link inside it trips a Turbopack RSC-manifest bug in Next 16.2.9
 // ("Could not find module .../link.js# in the React Client Manifest"). The
@@ -12,30 +11,38 @@ import {
   geoPath,
   geoGraticule10,
   geoBounds,
+  geoContains,
   type GeoProjection,
 } from "d3-geo";
 import { Delaunay } from "d3-delaunay";
 import { feature as topoFeature, mesh as topoMesh } from "topojson-client";
 import type { Topology, Objects } from "topojson-specification";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
+import { useAuth } from "../lib/AuthProvider";
+import UserMenu from "../AuthBar";
 import Logo from "./Logo";
+import ZipAnalysisPanel from "./ZipAnalysisPanel";
 
 /**
  * GlobeLandingHero — the landing hero merged with the scroll-driven globe.
  *
- * At the top of the scroll it reads as a normal hero: nav, headline, a ZIP
- * search box and metro chips, all floating over a slowly rotating halftone
- * globe. As the visitor scrolls through the pinned scene the hero copy fades
- * out, the globe eases to face North America and zooms in, and the abstract
- * land dots cross-fade into ~20,000 real U.S. ZIP codes, each colored by its
- * NeighborhoodIQ appreciation score.
+ * At the top of the scroll it reads as a normal hero: nav, headline and metro
+ * chips, all floating over a slowly rotating halftone globe. As the visitor
+ * scrolls through the pinned scene the hero copy fades out, the globe eases to
+ * face North America and zooms in, and the abstract land dots cross-fade into
+ * ~20,000 real U.S. ZIP codes, each colored by its NeighborhoodIQ appreciation
+ * score.
  *
  * On top of that scroll narrative it also supports FLYING TO A CITY: clicking a
  * metro chip, a city in the on-map rail, or a city label on the globe eases the
- * globe to that metro and zooms to street level, where every ZIP dot is
- * clickable (→ /dashboard?zip=). A "Back" control returns to the U.S. map. The
- * city fly-to is an animated blend (S.f) layered on top of the scroll state, so
- * the two never fight; page scroll is locked while a city is focused.
+ * globe to that metro and zooms to street level. A "Back" control returns to the
+ * U.S. map. The city fly-to is an animated blend (S.f) layered on top of the
+ * scroll state, so the two never fight; page scroll is locked while a city is
+ * focused.
+ *
+ * There is no separate dashboard page: hovering a ZIP for a couple of seconds
+ * pops a small card with an "Analyze" button (clicking a ZIP at city zoom does
+ * the same), which opens <ZipAnalysisPanel /> floating over the globe.
  *
  * This is intentionally self-contained: it carries its own copy of the globe
  * canvas/scroll engine (adapted from ./GlobeHero.tsx) and all of its styles are
@@ -67,6 +74,14 @@ const STATE_FILL_W = 0.82,
 // Time constant for easing the *displayed* focus toward a new target when you
 // re-target while already zoomed in (state→city drill, city→city hop).
 const RETARGET_TAU = 0.26;
+
+// Hover-to-analyze: rest the cursor on one ZIP this long and a small card with an
+// "Analyze" button appears beside it. The card then lingers this long after the
+// cursor leaves the ZIP, so there's time to travel to it (and click it).
+const HOVER_DWELL_MS = 1800;
+const CARD_GRACE_MS = 700;
+// A hover that falls into a gap between ZIP polygons is held this long (see onMove).
+const HOVER_MISS_MS = 140;
 
 // Per-ZIP borders. Zoomed into a state we draw REAL Census ZCTA polygons,
 // simplified and split per state under public/geo/zcta/ (~8MB total, one file
@@ -457,17 +472,16 @@ function StateRail({ onPick }: { onPick: (s: Place) => void }) {
 }
 
 export default function GlobeLandingHero() {
-  const router = useRouter();
-  // Read the router through a ref inside the canvas effect so the effect can
-  // keep []-deps and never tear down / recreate the engine on re-render.
-  const routerRef = useRef(router);
-  routerRef.current = router;
+  const { user, loading: authLoading } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<HTMLDivElement>(null);
   const apiRef = useRef<{
     flyTo: (p: Place) => void;
     flyHome: () => void;
     zoomBy: (g: number) => void;
+    holdCard: () => void;
+    releaseCard: () => void;
+    closeCard: () => void;
   } | null>(null);
   // Cities derived from the ZIP data (see buildCityIndex), keyed by state abbr.
   // Lives in a ref so the canvas engine can read it; `indexReady` flips once it's
@@ -477,10 +491,18 @@ export default function GlobeLandingHero() {
   const [progress, setProgress] = useState(0); // scroll t 0..1, mirrored for overlays
   const [focusProg, setFocusProg] = useState(0); // focus f 0..1, mirrored for overlays
   const [focusPlace, setFocusPlace] = useState<Place | null>(null);
-  const [hover, setHover] = useState<Hover>(null);
+  // The "Analyze" card that appears after resting on a ZIP, and the ZIP whose
+  // full analysis is open in the floating panel.
+  const [card, setCard] = useState<Hover>(null);
+  const [analysis, setAnalysis] = useState<{ zip: string; place?: string } | null>(null);
   const [ready, setReady] = useState(false);
-  const [query, setQuery] = useState("");
-  const [zipError, setZipError] = useState(false);
+
+  // Deep link: /?zip=48430 opens that ZIP's analysis (also where sign-in returns).
+  useEffect(() => {
+    const z = new URLSearchParams(window.location.search).get("zip");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (z && /^\d{5}$/.test(z)) setAnalysis({ zip: z });
+  }, []);
 
   useEffect(() => {
     const canvasEl = canvasRef.current;
@@ -591,6 +613,53 @@ export default function GlobeLandingHero() {
     let screen: { x: number; y: number; i: number }[] = [];
     let stateScreen: { x: number; y: number; place: Place }[] = [];
     let cityScreen: { x: number; y: number; place: Place }[] = [];
+    // ZCTA polygons drawn (clearly visible) in the last frame — when present, a
+    // ZIP is hit-tested by the polygon under the cursor instead of by its nearest
+    // centroid dot, so hovering anywhere inside a bordered ZIP selects it.
+    let hitFeats: ZctaFeat[] = [];
+
+    // Hover-to-analyze card lifecycle (see HOVER_DWELL_MS / CARD_GRACE_MS).
+    let lastMouse = { x: 0, y: 0 };
+    let dwellIdx = -1; // ZIP the cursor is resting on
+    let dwellTimer = 0;
+    let armedIdx = -1; // ZIP the Analyze card is showing for
+    let graceTimer = 0;
+    // True while the pointer is on the card itself. Hover hit-tests are rAF-
+    // throttled, so one can land just AFTER the pointer reached the card; without
+    // this it would re-arm the close timer on a card you're hovering.
+    let cardHeld = false;
+    function cancelGrace() {
+      if (graceTimer) clearTimeout(graceTimer);
+      graceTimer = 0;
+    }
+    function closeCard() {
+      cardHeld = false;
+      cancelGrace();
+      if (dwellTimer) clearTimeout(dwellTimer);
+      dwellTimer = 0;
+      dwellIdx = -1;
+      if (armedIdx !== -1) {
+        armedIdx = -1;
+        setCard(null);
+      }
+    }
+    function scheduleCardClose() {
+      if (armedIdx === -1 || graceTimer || cardHeld) return;
+      graceTimer = window.setTimeout(closeCard, CARD_GRACE_MS);
+    }
+    function armCard(idx: number) {
+      const z = zips;
+      if (!z) return;
+      cancelGrace();
+      armedIdx = idx;
+      setCard({
+        x: lastMouse.x,
+        y: lastMouse.y,
+        zip: z.zip[idx],
+        place: z.place[idx],
+        score: z.score[idx],
+      });
+    }
 
     const projection: GeoProjection = geoOrthographic().clipAngle(90);
     const path = geoPath(projection, ctx);
@@ -773,6 +842,7 @@ export default function GlobeLandingHero() {
       // as the view narrows past a few degrees across — Voronoi cells that give
       // every ZIP a colored border.
       screen = [];
+      hitFeats = [];
       if (zips && zipAlpha > 0.01) {
         const vx: number[] = [],
           vy: number[] = [],
@@ -846,12 +916,16 @@ export default function GlobeLandingHero() {
             c.globalAlpha = borderAlpha * 0.55;
             c.stroke();
             drawnIdx.add(idx);
+            if (borderAlpha > 0.3) hitFeats.push(zf);
             if (idx === S.hoverIdx) hoverF = zf.f;
           }
           // brighten the hovered ZIP's real boundary on top of the rest
           if (hoverF) {
             c.beginPath();
             path(hoverF);
+            c.globalAlpha = borderAlpha * 0.22;
+            c.fillStyle = "#ffffff";
+            c.fill();
             c.globalAlpha = borderAlpha;
             c.strokeStyle = "#ffffff";
             c.lineWidth = 1.5;
@@ -923,6 +997,9 @@ export default function GlobeLandingHero() {
             for (let j = 1; j < hoverPoly.length; j++)
               c.lineTo(hoverPoly[j][0], hoverPoly[j][1]);
             c.closePath();
+            c.globalAlpha = borderAlpha * 0.22;
+            c.fillStyle = "#ffffff";
+            c.fill();
             c.globalAlpha = borderAlpha;
             c.strokeStyle = "#ffffff";
             c.lineWidth = 1.4;
@@ -1027,9 +1104,9 @@ export default function GlobeLandingHero() {
         c.restore();
       }
 
-      // hover highlight ring
+      // hover highlight ring (dots only — a hovered polygon is outlined instead)
       const hv = S.hoverPt;
-      if (hv) {
+      if (hv && !hitFeats.length) {
         c.save();
         c.beginPath();
         c.arc(hv.x, hv.y, 7, 0, 2 * Math.PI);
@@ -1071,6 +1148,7 @@ export default function GlobeLandingHero() {
       const wasFocused = !!S.focusView && S.f > 0.02;
       S.focus = dest;
       resetUserZoom(); // start every place framed; the user re-zooms from there
+      closeCard();
       // First fly-in from the map: snap the displayed view to the destination so
       // the motion is driven purely by f. Re-targeting while already zoomed in
       // instead leaves focusView where it is and eases it across, so drilling
@@ -1108,9 +1186,79 @@ export default function GlobeLandingHero() {
       S.uy = my + ge * (cy + S.uy - my) - cy;
       S.uz = uzNew;
       clampPan();
+      closeCard();
       S.dirty = true;
     }
-    apiRef.current = { flyTo, flyHome, zoomBy: (g: number) => zoomAbout(g, S.w / 2, S.h / 2) };
+    // Zooming out past the framed view's limit steps out one level, same as the
+    // Back control: city → its state, state → the U.S. globe. The lock keeps one
+    // flick / trackpad inertia tail from popping several levels at once.
+    let stepOutLock = 0;
+    function zoomOrStepOut(g: number, mx: number, my: number) {
+      const now = performance.now();
+      if (g < 1 && S.focus && S.uz <= ZOOM_MIN * 1.001) {
+        if (now >= stepOutLock) {
+          const p = S.focus;
+          if (p.kind === "city" && p.stateAbbr && STATE_BY_ABBR[p.stateAbbr]) {
+            flyTo(STATE_BY_ABBR[p.stateAbbr]);
+          } else {
+            flyHome();
+          }
+          stepOutLock = now + FLY_SECONDS * 1000;
+        } else {
+          stepOutLock = Math.max(stepOutLock, now + 300);
+        }
+        return;
+      }
+      zoomAbout(g, mx, my);
+    }
+    apiRef.current = {
+      flyTo,
+      flyHome,
+      zoomBy: (g: number) => zoomOrStepOut(g, S.w / 2, S.h / 2),
+      holdCard: () => {
+        cardHeld = true;
+        cancelGrace();
+      },
+      releaseCard: () => {
+        cardHeld = false;
+        scheduleCardClose();
+      },
+      closeCard,
+    };
+
+    // The ZIP under a screen point, or -1. Zoomed in far enough to see real ZIP
+    // boundaries it's the polygon containing the point; otherwise the nearest
+    // centroid dot within `reach` px.
+    function zipAt(mx: number, my: number, reach: number, prev = -1): number {
+      if (hitFeats.length && idxByZip) {
+        const inv = projection.invert?.([mx, my]);
+        if (!inv) return -1;
+        for (const zf of hitFeats) {
+          const b = zf.bbox;
+          if (inv[0] < b[0] || inv[0] > b[2] || inv[1] < b[1] || inv[1] > b[3]) continue;
+          if (geoContains(zf.f, inv)) return idxByZip.get(zf.zip) ?? -1;
+        }
+        return -1;
+      }
+      let best = -1,
+        bestD = reach * reach,
+        prevD = Infinity;
+      for (const s of screen) {
+        const dx = s.x - mx,
+          dy = s.y - my;
+        const d = dx * dx + dy * dy;
+        if (s.i === prev) prevD = d;
+        if (d < bestD) {
+          bestD = d;
+          best = s.i;
+        }
+      }
+      // Dots in a dense metro sit a few px apart; stick with the one already
+      // hovered unless another is clearly closer, so the highlight doesn't
+      // flip-flop (and keep resetting the dwell clock) as the cursor drifts.
+      if (prev !== -1 && best !== prev && prevD <= reach * reach && bestD > prevD * 0.5) return prev;
+      return best;
+    }
 
     // --- drag-to-pan (mouse) + tap/click discrimination ---------------------
     // Once zoomed into a place you can drag the view around. `suppressClick` is
@@ -1126,6 +1274,7 @@ export default function GlobeLandingHero() {
       if (!S.focus || ev.button !== 0) return;
       drag = { sx: ev.clientX, sy: ev.clientY, ux: S.ux, uy: S.uy, moved: false };
       canvas.style.cursor = "grabbing";
+      closeCard();
     }
     function onDrag(ev: MouseEvent) {
       if (!drag) return;
@@ -1174,7 +1323,7 @@ export default function GlobeLandingHero() {
       if (pinch && ev.touches.length >= 2) {
         ev.preventDefault();
         const m = touchMid(ev.touches);
-        zoomAbout(m.d / pinch.dist, m.x, m.y);
+        zoomOrStepOut(m.d / pinch.dist, m.x, m.y);
         S.ux += m.x - pinch.cx; // also pan with the pinch midpoint
         S.uy += m.y - pinch.cy;
         clampPan();
@@ -1215,7 +1364,7 @@ export default function GlobeLandingHero() {
         zoomAbout(1.4, S.w / 2, S.h / 2);
       } else if (ev.key === "-" || ev.key === "_") {
         ev.preventDefault();
-        zoomAbout(1 / 1.4, S.w / 2, S.h / 2);
+        zoomOrStepOut(1 / 1.4, S.w / 2, S.h / 2);
       }
     }
 
@@ -1232,7 +1381,7 @@ export default function GlobeLandingHero() {
       // than before too, but clamped per-event so a big flick can't jump.
       const k = ev.ctrlKey ? 0.0045 : 0.0024;
       const g = clamp(Math.exp(-d * k), 0.4, 2.4);
-      zoomAbout(g, ev.clientX, ev.clientY);
+      zoomOrStepOut(g, ev.clientX, ev.clientY);
     }
 
     // ---- animation loop ----------------------------------------------------
@@ -1287,87 +1436,113 @@ export default function GlobeLandingHero() {
     }
 
     // ---- hover hit-test + cursor ------------------------------------------
-    let hoverRaf = 0;
-    function onMove(ev: MouseEvent) {
-      if (drag) return; // panning: skip hover so it doesn't fight the drag
-      if (hoverRaf) return;
-      hoverRaf = requestAnimationFrame(() => {
-        hoverRaf = 0;
-        const mx = ev.clientX,
-          my = ev.clientY;
-        const z = zips;
-        const active = !!z && (S.t >= 0.55 || S.f >= 0.55) && screen.length > 0;
+    // Applies the ZIP under the cursor (`best`, or -1): restarts/finishes the
+    // dwell clock, keeps the Analyze card alive while you travel to it, sets the
+    // cursor, and — only when the hovered ZIP actually CHANGED — updates the
+    // highlight. Mouse moves within one ZIP therefore cost nothing (no canvas
+    // re-render, no React render), which is what keeps hover from feeling laggy.
+    function settleHover(best: number) {
+      const mx = lastMouse.x,
+        my = lastMouse.y;
+      const z = zips;
 
-        let best = -1;
-        if (active) {
-          let bestD = 15 * 15;
-          for (const s of screen) {
-            const dx = s.x - mx,
-              dy = s.y - my;
-            const d = dx * dx + dy * dy;
-            if (d < bestD) {
-              bestD = d;
-              best = s.i;
-            }
+      // Hover-to-analyze: restart the dwell clock whenever the ZIP under the
+      // cursor changes; if it's still the same ZIP after HOVER_DWELL_MS, pop
+      // the Analyze card. An already-open card survives a short trip off its
+      // ZIP (to reach the card) and is dismissed after CARD_GRACE_MS.
+      if (best !== dwellIdx) {
+        dwellIdx = best;
+        if (dwellTimer) clearTimeout(dwellTimer);
+        dwellTimer = 0;
+        if (best !== -1)
+          dwellTimer = window.setTimeout(() => {
+            dwellTimer = 0;
+            armCard(best);
+          }, HOVER_DWELL_MS);
+      }
+      if (armedIdx !== -1) {
+        if (best === armedIdx) cancelGrace();
+        else scheduleCardClose();
+      }
+
+      // cursor: pointer over a ZIP, a city label, or a state label
+      let overAnchor = false;
+      if (best === -1) {
+        for (const a of cityScreen) {
+          const dx = a.x - mx,
+            dy = a.y - my;
+          if (dx * dx + dy * dy < 26 * 26) {
+            overAnchor = true;
+            break;
           }
         }
-
-        // cursor: pointer over a ZIP dot, a city label, or a state label
-        let overAnchor = false;
-        if (best === -1) {
-          for (const a of cityScreen) {
-            const dx = a.x - mx,
-              dy = a.y - my;
-            if (dx * dx + dy * dy < 26 * 26) {
+        if (!overAnchor)
+          for (const st of stateScreen) {
+            const dx = st.x - mx,
+              dy = st.y - my;
+            if (dx * dx + dy * dy < 20 * 20) {
               overAnchor = true;
               break;
             }
           }
-          if (!overAnchor)
-            for (const s of stateScreen) {
-              const dx = s.x - mx,
-                dy = s.y - my;
-              if (dx * dx + dy * dy < 20 * 20) {
-                overAnchor = true;
-                break;
-              }
-            }
-        }
-        canvas.style.cursor =
-          best !== -1 || overAnchor ? "pointer" : S.focus ? "grab" : "default";
+      }
+      canvas.style.cursor = best !== -1 || overAnchor ? "pointer" : S.focus ? "grab" : "default";
 
-        // projection() can return null if the hovered dot rotated to the clipped
-        // back hemisphere between the last render and this throttled hit-test
-        // (e.g. mid fly-in), so guard it rather than assert non-null.
-        const p = best !== -1 && z ? projection([z.lng[best], z.lat[best]]) : null;
-        if (!p || !z) {
-          if (S.hoverPt) {
-            S.hoverPt = null;
-            S.hoverIdx = -1;
-            setHover(null);
-            S.dirty = true;
-          }
-          return;
-        }
-        const next: Hover = {
-          x: p[0],
-          y: p[1],
-          zip: z.zip[best],
-          place: z.place[best],
-          score: z.score[best],
-        };
-        S.hoverPt = next;
+      if (best === S.hoverIdx) return; // same ZIP as before → nothing to redraw
+      // projection() can return null if the hovered dot rotated to the clipped
+      // back hemisphere between the last render and this throttled hit-test
+      // (e.g. mid fly-in), so guard it rather than assert non-null.
+      const p = best !== -1 && z ? projection([z.lng[best], z.lat[best]]) : null;
+      if (best === -1 || !z || !p) {
+        S.hoverPt = null;
+        S.hoverIdx = -1;
+      } else {
+        S.hoverPt = { x: p[0], y: p[1], zip: z.zip[best], place: z.place[best], score: z.score[best] };
         S.hoverIdx = best;
-        setHover(next);
-        S.dirty = true;
+      }
+      S.dirty = true;
+    }
+
+    let hoverRaf = 0;
+    let missTimer = 0;
+    function onMove(ev: MouseEvent) {
+      if (drag) return; // panning: skip hover so it doesn't fight the drag
+      lastMouse = { x: ev.clientX, y: ev.clientY };
+      if (hoverRaf) return;
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = 0;
+        const z = zips;
+        const active = !!z && (S.t >= 0.55 || S.f >= 0.55) && screen.length > 0;
+        const best = active ? zipAt(lastMouse.x, lastMouse.y, 15, dwellIdx) : -1;
+        if (best !== -1) {
+          if (missTimer) clearTimeout(missTimer);
+          missTimer = 0;
+          settleHover(best);
+        } else if (dwellIdx !== -1 && hitFeats.length > 0) {
+          // The seams between neighbouring ZIP polygons don't tile perfectly, so
+          // crossing one reads as a one-frame "no ZIP". Ride out a brief miss
+          // rather than flicker the highlight (and reset the dwell clock).
+          if (!missTimer)
+            missTimer = window.setTimeout(() => {
+              missTimer = 0;
+              settleHover(-1);
+            }, HOVER_MISS_MS);
+        } else settleHover(-1);
       });
     }
     function onLeave() {
       canvas.style.cursor = "default";
+      if (missTimer) clearTimeout(missTimer);
+      missTimer = 0;
+      // Leaving the canvas onto the Analyze card must not kill the card — the
+      // card's own mouseenter cancels this grace timer.
+      if (dwellTimer) clearTimeout(dwellTimer);
+      dwellTimer = 0;
+      dwellIdx = -1;
+      scheduleCardClose();
       if (S.hoverPt) {
         S.hoverPt = null;
         S.hoverIdx = -1;
-        setHover(null);
         S.dirty = true;
       }
     }
@@ -1382,23 +1557,14 @@ export default function GlobeLandingHero() {
         my = ev.clientY;
       const z = zips;
       const mapReady = S.t >= 0.55 || S.f >= 0.55;
+      closeCard();
       const hitZip = () => {
         if (!z || !mapReady || !screen.length) return false;
-        let best = -1,
-          bestD = 14 * 14;
-        for (const s of screen) {
-          const dx = s.x - mx,
-            dy = s.y - my;
-          const d = dx * dx + dy * dy;
-          if (d < bestD) {
-            bestD = d;
-            best = s.i;
-          }
-        }
+        const best = zipAt(mx, my, 14);
         if (best === -1) return false;
-        // Only open the dashboard from full city zoom. From farther out (U.S.
+        // Only open the analysis from full city zoom. From farther out (U.S.
         // or state view) a ZIP click zooms INTO that ZIP's city first, so a
-        // click never teleports you off the map unexpectedly.
+        // click never jumps you somewhere unexpected.
         if (S.focus?.kind !== "city") {
           const city = cityByLabel.get(z.place[best]);
           if (city) {
@@ -1406,7 +1572,7 @@ export default function GlobeLandingHero() {
             return true;
           }
         }
-        routerRef.current.push(`/dashboard?zip=${encodeURIComponent(z.zip[best])}`);
+        setAnalysis({ zip: z.zip[best], place: z.place[best] });
         return true;
       };
       const hitCity = () => {
@@ -1544,6 +1710,9 @@ export default function GlobeLandingHero() {
     return () => {
       cancelAnimationFrame(raf);
       if (hoverRaf) cancelAnimationFrame(hoverRaf);
+      if (dwellTimer) clearTimeout(dwellTimer);
+      if (graceTimer) clearTimeout(graceTimer);
+      if (missTimer) clearTimeout(missTimer);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onResize);
       canvas.removeEventListener("mousemove", onMove);
@@ -1572,20 +1741,6 @@ export default function GlobeLandingHero() {
     };
   }, [focusPlace]);
 
-  // ---- hero search -----------------------------------------------------------
-  function goToZip(zip: string) {
-    router.push(`/dashboard?zip=${encodeURIComponent(zip)}`);
-  }
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    const clean = query.trim();
-    if (/^\d{5}$/.test(clean)) {
-      setZipError(false);
-      goToZip(clean);
-    } else {
-      setZipError(true);
-    }
-  }
   const flyToPlace = (p: Place) => apiRef.current?.flyTo(p);
   const flyToCity = (c: City) => apiRef.current?.flyTo(cityPlace(c));
   // Back steps out one level: a city returns to its parent state (if known),
@@ -1646,8 +1801,8 @@ export default function GlobeLandingHero() {
             </a>
             <div className="lgh-navright">
               <a href="/how-it-works" className="lgh-navlink">How it works</a>
-              <a href="/login" className="lgh-navlink lgh-navsignin">Sign in</a>
-              <a href="/login" className="lgh-navcta">Analyze a ZIP</a>
+              {!authLoading &&
+                (user ? <UserMenu /> : <a href="/login" className="lgh-navcta">Sign in</a>)}
             </div>
           </nav>
 
@@ -1670,41 +1825,11 @@ export default function GlobeLandingHero() {
               <p className="lgh-sub">
                 Real Zillow data for every U.S. metro ZIP — what homes cost,
                 whether prices are rising or cooling, and how it compares to its
-                metro. Plus an honest flag when one looks shaky. Search yours, or
-                explore the map.
+                metro. Plus an honest flag when one looks shaky. Explore the map
+                and hover any ZIP to analyze it.
               </p>
 
-              <form onSubmit={handleSearch} className="lgh-form">
-                <div className="lgh-inputwrap">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="11" cy="11" r="7" stroke="rgba(241,244,238,0.5)" strokeWidth="2" />
-                    <path d="m20 20-3.2-3.2" stroke="rgba(241,244,238,0.5)" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                  <input
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      if (zipError) setZipError(false);
-                    }}
-                    placeholder="Enter a ZIP code, e.g. 02127"
-                    inputMode="numeric"
-                    aria-label="ZIP code"
-                    className="lgh-input"
-                  />
-                </div>
-                <button type="submit" className="lgh-analyze">
-                  Analyze
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              </form>
-
-              {zipError && (
-                <p className="lgh-error">Enter a 5-digit ZIP code — try 02127 or 78704.</p>
-              )}
-
-              <p className="lgh-caption">Or fly to a metro</p>
+              <p className="lgh-caption">Fly to a metro</p>
               <div className="lgh-chips">
                 {METROS.map((m) => (
                   <button
@@ -1739,7 +1864,7 @@ export default function GlobeLandingHero() {
               <h2 className="lgh-maptitle">Every ZIP, one score.</h2>
               <p className="lgh-mapsub">
                 Brighter means a higher 2-year chance of rising. Click
-                anywhere to zoom in.
+                anywhere to zoom in, then hover a ZIP to analyze it.
               </p>
               <div className="lgh-legend">
                 <span className="lgh-legend-label">Lower</span>
@@ -1805,14 +1930,9 @@ export default function GlobeLandingHero() {
               ) : (
                 <>
                   <p className="lgh-citysub">
-                    Each point is a scored ZIP. Hover to inspect it, click to open
-                    it on the dashboard.
+                    Rest on any ZIP for a moment to analyze it, or click one to
+                    open its analysis right away.
                   </p>
-                  {focusPlace?.zip ? (
-                    <a className="lgh-mapcta" href={`/dashboard?zip=${focusPlace.zip}`}>
-                      Open {focusPlace.name} on the dashboard →
-                    </a>
-                  ) : null}
                   {stateCities.length > 1 && (
                     <CityRail
                       cities={stateCities}
@@ -1825,32 +1945,59 @@ export default function GlobeLandingHero() {
             </div>
           </div>
 
-          {/* Hover tooltip */}
-          {hover && (
+          {/* Hover-to-analyze card — appears after resting on a ZIP for a moment */}
+          {card && (
             <div
-              className="lgh-tip"
+              className="lgh-card"
               style={{
-                left: hover.x,
-                top: hover.y,
+                left: card.x,
+                top: card.y,
                 transform: `translate(${
-                  hover.x >
-                  (typeof window !== "undefined" ? window.innerWidth : 1200) - 200
-                    ? "-108%"
-                    : "12px"
-                }, -50%)`,
+                  card.x > (typeof window !== "undefined" ? window.innerWidth : 1200) - 260
+                    ? "calc(-100% - 14px)"
+                    : "14px"
+                }, ${
+                  card.y > (typeof window !== "undefined" ? window.innerHeight : 800) - 150
+                    ? "calc(-100% - 8px)"
+                    : "8px"
+                })`,
               }}
+              onMouseEnter={() => apiRef.current?.holdCard()}
+              onMouseLeave={() => apiRef.current?.releaseCard()}
             >
-              <div className="lgh-tip-place">{hover.place}</div>
-              <div className="lgh-tip-row">
-                <span className="lgh-tip-zip">ZIP {hover.zip}</span>
-                <span className="lgh-tip-score" data-tier={tierOf(hover.score)}>
-                  {hover.score}
+              <div className="lgh-card-place">{card.place}</div>
+              <div className="lgh-card-row">
+                <span className="lgh-tip-zip">ZIP {card.zip}</span>
+                <span className="lgh-tip-score" data-tier={tierOf(card.score)}>
+                  {card.score}
                 </span>
               </div>
+              <button
+                type="button"
+                className="lgh-card-btn"
+                onClick={() => {
+                  setAnalysis({ zip: card.zip, place: card.place });
+                  apiRef.current?.closeCard();
+                }}
+              >
+                Analyze
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
             </div>
           )}
         </div>
       </section>
+
+      {analysis && (
+        <ZipAnalysisPanel
+          zip={analysis.zip}
+          place={analysis.place}
+          onSelectZip={(zip) => setAnalysis({ zip })}
+          onClose={() => setAnalysis(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1899,7 +2046,7 @@ const LGH_CSS = `
   padding: 18px clamp(20px, 5vw, 48px);
   pointer-events: none;
 }
-.lgh-nav a { pointer-events: auto; }
+.lgh-nav a, .lgh-nav .niq-usermenu { pointer-events: auto; }
 .lgh-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
 .lgh-word {
   font-family: var(--font-sans-stack); font-weight: 600; font-size: 15px;
@@ -1914,7 +2061,6 @@ const LGH_CSS = `
   transition: opacity 0.15s ease;
 }
 .lgh-navcta:hover { opacity: 0.88; }
-@media (max-width: 480px) { .lgh-navsignin { display: none; } }
 
 /* Overlays — the container never eats pointer events (so the canvas keeps its
    hover/click); only interactive descendants of an ACTIVE overlay do. */
@@ -1944,32 +2090,9 @@ const LGH_CSS = `
 }
 .lgh-sub { font-size: 16px; line-height: 1.65; color: rgba(244,246,248,0.68); max-width: 480px; margin: 0 auto 32px; }
 
-.lgh-form { display: flex; gap: 10px; max-width: 470px; margin: 0 auto; }
-.lgh-inputwrap {
-  flex: 1; display: flex; align-items: center; gap: 9px;
-  background: rgba(241,244,238,0.08); border: 1px solid rgba(241,244,238,0.22);
-  border-radius: 999px; padding: 13px 18px; transition: border-color 0.15s ease;
-}
-.lgh-inputwrap:focus-within { border-color: var(--lgh-accent); }
-.lgh-input {
-  border: none; outline: none; background: transparent; width: 100%;
-  font-family: var(--lgh-mono); font-size: 14px; color: var(--lgh-mist);
-}
-.lgh-input::placeholder { color: rgba(241,244,238,0.42); }
-.lgh-analyze {
-  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
-  background: var(--lgh-mist); color: var(--lgh-ink); border: none;
-  padding: 0 22px; border-radius: 999px; font-size: 14px; font-weight: 600;
-  cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease;
-}
-.lgh-analyze:hover { opacity: 0.9; }
-.lgh-analyze:active { transform: scale(0.98); }
-
-.lgh-error { font-size: 13px; color: var(--lgh-coral); margin: 12px 0 0; }
-
 .lgh-caption {
   font-family: var(--lgh-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: rgba(241,244,238,0.45); margin: 26px 0 12px;
+  color: rgba(241,244,238,0.45); margin: 0 0 12px;
 }
 .lgh-chips { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .lgh-chip {
@@ -1996,10 +2119,6 @@ const LGH_CSS = `
   font-size: clamp(28px, 4vw, 42px); letter-spacing: -0.015em; margin: 0 0 12px; color: var(--lgh-mist);
 }
 .lgh-mapsub { font-size: 15px; line-height: 1.55; color: rgba(241,244,238,0.72); margin: 0 auto 16px; max-width: 460px; }
-.lgh-mapcta {
-  display: inline-block; background: var(--lgh-mist); color: var(--lgh-ink); text-decoration: none;
-  padding: 11px 22px; border-radius: 999px; font-size: 14px; font-weight: 600;
-}
 .lgh-legend { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 4px; }
 .lgh-legend-label { font-family: var(--lgh-mono); font-size: 11px; color: rgba(241,244,238,0.6); }
 .lgh-legend-ramp {
@@ -2075,21 +2194,34 @@ const LGH_CSS = `
 }
 .lgh-citysub { font-size: 14.5px; line-height: 1.55; color: rgba(241,244,238,0.72); margin: 0 auto 18px; max-width: 440px; }
 
-/* Hover tooltip */
-.lgh-tip {
-  position: absolute; z-index: 4; pointer-events: none;
-  background: rgba(10,16,28,0.9); border: 1px solid rgba(241,244,238,0.18);
-  border-radius: 10px; padding: 9px 12px; min-width: 130px; backdrop-filter: blur(6px);
-}
-.lgh-tip-place { font-size: 12.5px; font-weight: 600; color: var(--lgh-mist); margin-bottom: 4px; }
-.lgh-tip-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* Hover-to-analyze card score/ZIP text */
 .lgh-tip-zip { font-family: var(--lgh-mono); font-size: 11.5px; color: rgba(241,244,238,0.6); }
 .lgh-tip-score { font-family: var(--lgh-mono); font-size: 14px; font-weight: 600; color: var(--lgh-mist); }
 .lgh-tip-score[data-tier="5"] { color: #b6e63a; }
 .lgh-tip-score[data-tier="4"] { color: #40d385; }
 .lgh-tip-score[data-tier="3"] { color: #1fbca9; }
 
+/* Hover-to-analyze card — interactive sibling of the tooltip above */
+.lgh-card {
+  position: absolute; z-index: 6;
+  background: rgba(10,16,28,0.94); border: 1px solid rgba(241,244,238,0.24);
+  border-radius: 12px; padding: 11px 12px 12px; min-width: 168px;
+  backdrop-filter: blur(8px); box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+  text-align: left; animation: lghCardIn 0.16s ease-out both; transform-origin: top left;
+}
+@keyframes lghCardIn { from { opacity: 0; scale: 0.96; } to { opacity: 1; scale: 1; } }
+.lgh-card-place { font-size: 12.5px; font-weight: 600; color: var(--lgh-mist); margin-bottom: 4px; }
+.lgh-card-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.lgh-card-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--lgh-mist); color: var(--lgh-ink); border: none; border-radius: 999px;
+  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.lgh-card-btn:hover { opacity: 0.9; }
+.lgh-card-btn:active { transform: scale(0.98); }
+
 @media (prefers-reduced-motion: reduce) {
-  .lgh-scrollcue-dot, .lgh-spinner { animation: none; }
+  .lgh-scrollcue-dot, .lgh-spinner, .lgh-card { animation: none; }
 }
 `;
