@@ -1,5 +1,5 @@
 // Shared, framework-agnostic type for a scored ZIP. Lives in its own module so
-// both Server (scores.ts, route handlers) and Client (NeighborhoodIQ.tsx) code
+// both Server (scores.ts, route handlers) and Client (ZipAnalysisPanel.tsx) code
 // can import it without pulling server-only deps into the browser bundle.
 
 export type ZipData = {
