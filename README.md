@@ -40,10 +40,9 @@ App Hosting** ([`web/apphosting.yaml`](web/apphosting.yaml), `output: "standalon
 
 | Route | File | What it does |
 |-------|------|--------------|
-| `/` | [`app/page.tsx`](web/app/page.tsx) → [`GlobeLandingHero.tsx`](web/app/components/GlobeLandingHero.tsx) | Public landing page: a scroll-driven orthographic globe that flies from the whole Earth into a state and renders real ZCTA boundaries, colored by score. Carries its own nav, ZIP search, and metro chips. |
+| `/` | [`app/page.tsx`](web/app/page.tsx) → [`GlobeLandingHero.tsx`](web/app/components/GlobeLandingHero.tsx) + [`ZipAnalysisPanel.tsx`](web/app/components/ZipAnalysisPanel.tsx) | Public landing page: a scroll-driven orthographic globe that flies from the whole Earth into a state and renders real ZCTA boundaries, colored by score. Carries its own nav and metro chips. Hover a ZIP for a couple of seconds (or click one at city zoom) to open its floating analysis. |
 | `/how-it-works` | [`app/how-it-works/page.tsx`](web/app/how-it-works/page.tsx) | Plain-language explainer: the signals, the data, how to read a score, FAQ. |
 | `/login` | [`app/login/page.tsx`](web/app/login/page.tsx) | Split brand panel + sign-in / create-account tabs. Google OAuth and email/password, with reset and "continue as guest". |
-| `/dashboard` | [`app/dashboard/page.tsx`](web/app/dashboard/page.tsx) → [`NeighborhoodIQ.tsx`](web/app/NeighborhoodIQ.tsx) | The tool. Search a ZIP → score, risk tier, price history chart vs metro and national medians, metro peers, favorites, and an AI chat panel. Gated by [`AuthGate`](web/app/components/AuthGate.tsx) in `redirect` mode. |
 
 ### API routes
 
