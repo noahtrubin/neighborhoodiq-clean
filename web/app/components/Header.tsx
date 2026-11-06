@@ -13,7 +13,7 @@ export default function Header() {
     <header className="niq-header">
       <div className="niq-header-inner">
         <Link
-          href={user ? "/dashboard" : "/"}
+          href="/"
           className="niq-brand"
           aria-label="NeighborhoodIQ home"
         >

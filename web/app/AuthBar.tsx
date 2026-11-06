@@ -1,11 +1,10 @@
 "use client";
 
 // Signed-in user menu shown in the header: avatar + dropdown with the user's
-// identity, a shortcut to their favorites, and sign-out. The signed-out
-// "Sign in" affordance lives in Header.tsx (links to /login).
+// identity and sign-out. The signed-out "Sign in" affordance lives in
+// Header.tsx (links to /login).
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useAuth } from "./lib/AuthProvider";
 import Icon from "./components/Icon";
 
@@ -56,15 +55,6 @@ export default function UserMenu() {
             <div className="nm-name">{user.displayName ?? "Signed in"}</div>
             <div className="nm-email">{user.email}</div>
           </div>
-          <Link
-            href="/dashboard#saved"
-            className="niq-menu-item"
-            role="menuitem"
-            onClick={() => setOpen(false)}
-          >
-            <Icon name="star" size={16} />
-            Saved
-          </Link>
           <button
             className="niq-menu-item"
             role="menuitem"

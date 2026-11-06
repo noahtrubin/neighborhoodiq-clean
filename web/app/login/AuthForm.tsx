@@ -7,9 +7,9 @@ import { useAuth } from "../lib/AuthProvider";
 import { GoogleIcon } from "../components/Icon";
 import Logo from "../components/Logo";
 
-// Only allow internal, single-slash redirect targets; default to the dashboard.
+// Only allow internal, single-slash redirect targets; default to the home page.
 function safeNext(raw: string | null): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/dashboard";
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
   return raw;
 }
 
@@ -43,7 +43,7 @@ export default function AuthForm() {
 
       <h1>Welcome to NeighborhoodIQ</h1>
       <p className="auth-sub">
-        Sign in to open your dashboard, save favorite ZIPs, and keep your AI chats.
+        Sign in to analyze any ZIP, save favorites, and keep your AI chats.
       </p>
 
       <button type="button" className="auth-google" onClick={onGoogle} disabled={busy}>
