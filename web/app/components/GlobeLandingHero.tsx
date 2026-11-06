@@ -1189,10 +1189,32 @@ export default function GlobeLandingHero() {
       closeCard();
       S.dirty = true;
     }
+    // Zooming out past the framed view's limit steps out one level, same as the
+    // Back control: city → its state, state → the U.S. globe. The lock keeps one
+    // flick / trackpad inertia tail from popping several levels at once.
+    let stepOutLock = 0;
+    function zoomOrStepOut(g: number, mx: number, my: number) {
+      const now = performance.now();
+      if (g < 1 && S.focus && S.uz <= ZOOM_MIN * 1.001) {
+        if (now >= stepOutLock) {
+          const p = S.focus;
+          if (p.kind === "city" && p.stateAbbr && STATE_BY_ABBR[p.stateAbbr]) {
+            flyTo(STATE_BY_ABBR[p.stateAbbr]);
+          } else {
+            flyHome();
+          }
+          stepOutLock = now + FLY_SECONDS * 1000;
+        } else {
+          stepOutLock = Math.max(stepOutLock, now + 300);
+        }
+        return;
+      }
+      zoomAbout(g, mx, my);
+    }
     apiRef.current = {
       flyTo,
       flyHome,
-      zoomBy: (g: number) => zoomAbout(g, S.w / 2, S.h / 2),
+      zoomBy: (g: number) => zoomOrStepOut(g, S.w / 2, S.h / 2),
       holdCard: () => {
         cardHeld = true;
         cancelGrace();
@@ -1301,7 +1323,7 @@ export default function GlobeLandingHero() {
       if (pinch && ev.touches.length >= 2) {
         ev.preventDefault();
         const m = touchMid(ev.touches);
-        zoomAbout(m.d / pinch.dist, m.x, m.y);
+        zoomOrStepOut(m.d / pinch.dist, m.x, m.y);
         S.ux += m.x - pinch.cx; // also pan with the pinch midpoint
         S.uy += m.y - pinch.cy;
         clampPan();
@@ -1342,7 +1364,7 @@ export default function GlobeLandingHero() {
         zoomAbout(1.4, S.w / 2, S.h / 2);
       } else if (ev.key === "-" || ev.key === "_") {
         ev.preventDefault();
-        zoomAbout(1 / 1.4, S.w / 2, S.h / 2);
+        zoomOrStepOut(1 / 1.4, S.w / 2, S.h / 2);
       }
     }
 
@@ -1359,7 +1381,7 @@ export default function GlobeLandingHero() {
       // than before too, but clamped per-event so a big flick can't jump.
       const k = ev.ctrlKey ? 0.0045 : 0.0024;
       const g = clamp(Math.exp(-d * k), 0.4, 2.4);
-      zoomAbout(g, ev.clientX, ev.clientY);
+      zoomOrStepOut(g, ev.clientX, ev.clientY);
     }
 
     // ---- animation loop ----------------------------------------------------
